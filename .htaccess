@@ -1,0 +1,61 @@
+# Ativa reescrita
+RewriteEngine On
+
+# Segurança básica: impede listagem de diretórios
+Options -Indexes
+
+# Bloqueia acesso direto a arquivos sensíveis na raiz do projeto
+<FilesMatch "^(config\.php|helpers\.php|install\.sql|composer\.(json|lock)|\.env|\.env\..*|README\.md)$">
+  Require all denied
+</FilesMatch>
+
+# IMPORTANTE:
+# Não use checagem de arquivo/diretório existente na raiz (REQUEST_FILENAME -f/-d),
+# pois isso permitiria acessar arquivos PHP sensíveis fora de /public.
+# Em vez disso, só liberamos explicitamente /public e /api.
+
+# Deixa tudo que já está em /public passar direto
+RewriteRule ^public/ - [L]
+
+# Deixa tudo que já está em /api passar direto (os endpoints ficam fora de /public)
+RewriteRule ^api/ - [L]
+
+# Envia todo o restante para dentro de /public preservando o caminho original
+RewriteRule ^(.*)$ public/$1 [L,QSA]
+
+# Cache para estáticos dentro de /public (imagens/fotos, css, js)
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType image/webp "access plus 30 days"
+  ExpiresByType image/avif "access plus 30 days"
+  ExpiresByType image/jpeg "access plus 30 days"
+  ExpiresByType image/png  "access plus 30 days"
+  ExpiresByType image/gif  "access plus 30 days"
+  ExpiresByType image/svg+xml "access plus 30 days"
+  ExpiresByType text/css   "access plus 7 days"
+  ExpiresByType application/javascript "access plus 7 days"
+  # Fotos de ponto: geralmente não mudam após salvas
+  <FilesMatch "^public/photos/">
+    ExpiresDefault "access plus 60 days"
+  </FilesMatch>
+</IfModule>
+
+# (Opcional) Headers básicos de segurança — requer mod_headers
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+# (Opcional) Forçar HTTPS caso seu ambiente suporte
+# <IfModule mod_rewrite.c>
+#   RewriteCond %{HTTPS} !=on
+#   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+# </IfModule>
+
+# (Opcional) Compatibilidade de rotas legadas, caso futuramente renomeie arquivos.
+# Exemplo: se trocar teacher_* por collaborator_*, pode redirecionar 301:
+# RedirectMatch 301 ^/admin/teachers\.php$ /admin/collaborators.php
+# RedirectMatch 301 ^/admin/teacher_edit\.php$ /admin/collaborator_edit.php
+# RedirectMatch 301 ^/admin/teacher_monthly_report\.php$ /admin/collaborator_monthly_report.php
