@@ -169,6 +169,8 @@ if (!is_array($input)) {
 $cpf = preg_replace('/\D/', '', (string)($input['cpf'] ?? ''));
 $pin = (string)($input['pin'] ?? '');
 $photo = $input['photo'] ?? null;
+$photos = $input['photos'] ?? null; // New: array of photos
+$face_descriptors = $input['face_descriptors'] ?? null; // New: array of face descriptors
 $geo = $input['geo'] ?? null;
 
 if (!$pin) {
@@ -260,27 +262,50 @@ if ($action === 'entrada') {
     }
 }
 
-// Salva foto (opcional; diretório público é /public/photos)
+// Salva foto(s) (opcional; diretório público é /public/photos)
 $dir = __DIR__ . '/../public/photos/';
 if (!is_dir($dir)) mkdir($dir, 0777, true);
 $filename = null;
+$photoUrls = [];
 $photoQuality = null;
 $photoQualityOk = null;
-if ($photo) {
-    if (preg_match('#^data:image/[^;]+;base64,(.+)$#', (string)$photo, $m)) {
-        $filename = 'foto_' . $teacherId . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(3)) . '.jpg';
-        $filepath = $dir . $filename;
-        file_put_contents($filepath, base64_decode($m[1]));
 
-        // Avalia a qualidade da foto e, se baixa, a aprovação fica pendente
-        $photoQuality = analyzePhotoQuality($filepath);
-        $photoQualityOk = $photoQuality['ok'] ?? false;
-    } else {
-        http_response_code(400);
-        echo json_encode(['status'=>'error','message'=>'Foto inválida.']);
-        exit;
+// Handle multiple photos if provided, otherwise fallback to single photo
+$photosToProcess = [];
+if (is_array($photos) && !empty($photos)) {
+    $photosToProcess = array_slice($photos, 0, 5); // Limit to 5 photos max
+} else if ($photo) {
+    $photosToProcess = [$photo];
+}
+
+$savedPhotos = [];
+$bestQuality = null;
+foreach ($photosToProcess as $index => $photoData) {
+    if ($photoData && preg_match('#^data:image/[^;]+;base64,(.+)$#', (string)$photoData, $m)) {
+        $currentFilename = 'foto_' . $teacherId . '_' . date('Ymd_His') . '_' . $index . '_' . bin2hex(random_bytes(3)) . '.jpg';
+        $filepath = $dir . $currentFilename;
+        file_put_contents($filepath, base64_decode($m[1]));
+        
+        $savedPhotos[] = $currentFilename;
+        $photoUrls[] = '/public/photos/' . $currentFilename;
+        
+        // Analyze quality and keep track of the best one
+        $currentQuality = analyzePhotoQuality($filepath);
+        if ($bestQuality === null || ($currentQuality['ok'] && !$bestQuality['ok'])) {
+            $bestQuality = $currentQuality;
+            $filename = $currentFilename; // Use best quality as primary photo
+            $photoQuality = $currentQuality;
+            $photoQualityOk = $currentQuality['ok'] ?? false;
+        }
     }
 }
+
+if (!empty($photosToProcess) && empty($savedPhotos)) {
+    http_response_code(400);
+    echo json_encode(['status'=>'error','message'=>'Foto(s) inválida(s).']);
+    exit;
+}
+
 $photoUrl = $filename ? '/public/photos/' . $filename : null;
 
 // Aprovação automática somente se houver foto, localização e boa qualidade; senão fica pendente (NULL)
@@ -301,8 +326,17 @@ if ($action === 'entrada') {
     audit_log('create','attendance',$pdo->lastInsertId(),['teacher_id'=>$teacherId,'type'=>'checkin']);
 
     $msg = 'Entrada registrada';
-    if ($hasPhoto) $msg .= ' com foto';
+    if ($hasPhoto) {
+        if (count($savedPhotos) > 1) {
+            $msg .= ' com ' . count($savedPhotos) . ' fotos';
+        } else {
+            $msg .= ' com foto';
+        }
+    }
     if ($hasGeo) $msg .= ' e localização';
+    if (is_array($face_descriptors) && !empty($face_descriptors)) {
+        $msg .= ' (com reconhecimento facial)';
+    }
     if ($approvedNow === 1) {
         $msg .= '!';
     } else {
@@ -402,8 +436,17 @@ if ($action === 'entrada') {
       audit_log('update','attendance',$open['id'],['teacher_id'=>$teacherId,'type'=>'checkout','delta'=>$delta]);
 
       $msg = 'Saída registrada';
-      if ($hasPhoto) $msg .= ' com foto';
+      if ($hasPhoto) {
+          if (count($savedPhotos) > 1) {
+              $msg .= ' com ' . count($savedPhotos) . ' fotos';
+          } else {
+              $msg .= ' com foto';
+          }
+      }
       if ($hasGeo) $msg .= ' e localização';
+      if (is_array($face_descriptors) && !empty($face_descriptors)) {
+          $msg .= ' (com reconhecimento facial)';
+      }
       if ($approvedNow === 1) {
           $msg .= '!';
       } else {

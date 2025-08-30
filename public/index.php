@@ -266,6 +266,13 @@ $ogImage   = $canonical . 'img/logo_login.png';
     let stream = null;
     let currentFacing = 'user';
     let capturedDataUrl = null;
+    
+    // Face API variables for multiple frame capture
+    let faceApiLoaded = false;
+    let faceApiModelUrl = '';
+    let capturedFrames = []; // stores {photo: dataURL, descriptor: array}
+    let capturingFrames = false;
+    const MAX_FRAMES = 5;
 
     // IndexedDB (pendências offline)
     let dbi;
@@ -337,6 +344,130 @@ $ogImage   = $canonical . 'img/logo_login.png';
     window.addEventListener('online', drainPending);
     drainPending();
 
+    // Face API functions (reused from capture_face.php)
+    async function loadFaceApi() {
+      if (window.faceapi) return faceApiModelUrl || 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+      const cdns = [
+        { lib: 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js', model: 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/' },
+        { lib: 'https://unpkg.com/@vladmandic/face-api/dist/face-api.min.js', model: 'https://unpkg.com/@vladmandic/face-api/model/' }
+      ];
+      for (const c of cdns) {
+        try {
+          await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = c.lib;
+            s.onload = resolve;
+            s.onerror = () => reject(new Error('Falha ao carregar ' + c.lib));
+            document.head.appendChild(s);
+          });
+          if (window.faceapi) return c.model;
+        } catch (e) { console.warn(e.message); }
+      }
+      throw new Error('Não foi possível carregar face-api.js de nenhum CDN.');
+    }
+
+    async function initFaceApi() {
+      try {
+        faceApiModelUrl = await loadFaceApi();
+        await faceapi.nets.ssdMobilenetv1.loadFromUri(faceApiModelUrl);
+        await faceapi.nets.faceLandmark68Net.loadFromUri(faceApiModelUrl);
+        await faceapi.nets.faceRecognitionNet.loadFromUri(faceApiModelUrl);
+        faceApiLoaded = true;
+        return true;
+      } catch (e) {
+        console.warn('Face API not available:', e.message);
+        return false;
+      }
+    }
+
+    async function captureFrameWithDescriptor() {
+      if (!faceApiLoaded || !stream) return null;
+      try {
+        const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
+        if (!detection) return null;
+        
+        const photoDataUrl = takeSnapshotFromVideo();
+        if (!photoDataUrl) return null;
+        
+        return {
+          photo: photoDataUrl,
+          descriptor: Array.from(detection.descriptor)
+        };
+      } catch (e) {
+        console.warn('Face detection error:', e.message);
+        return null;
+      }
+    }
+
+    async function captureMultipleFrames() {
+      if (!stream || capturingFrames) return;
+      
+      capturingFrames = true;
+      capturedFrames = [];
+      statusEl.textContent = 'Capturando múltiplas amostras...';
+      
+      const progressContainer = document.createElement('div');
+      progressContainer.innerHTML = `
+        <div class="progress mt-2 mb-2">
+          <div class="progress-bar progress-bar-striped progress-bar-animated" 
+               role="progressbar" style="width: 0%" id="capture-progress"></div>
+        </div>
+        <small class="text-muted">Capturando amostra <span id="capture-count">0</span> de ${MAX_FRAMES}</small>
+      `;
+      statusEl.appendChild(progressContainer);
+      
+      const progressBar = document.getElementById('capture-progress');
+      const countSpan = document.getElementById('capture-count');
+      
+      for (let i = 0; i < MAX_FRAMES; i++) {
+        try {
+          countSpan.textContent = i + 1;
+          progressBar.style.width = ((i + 1) / MAX_FRAMES * 100) + '%';
+          
+          const frame = await captureFrameWithDescriptor();
+          if (frame) {
+            capturedFrames.push(frame);
+          }
+          
+          // Small delay between captures
+          if (i < MAX_FRAMES - 1) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+        } catch (e) {
+          console.warn('Error capturing frame', i + 1, ':', e.message);
+        }
+      }
+      
+      capturingFrames = false;
+      progressContainer.remove();
+      
+      if (capturedFrames.length > 0) {
+        statusEl.textContent = `${capturedFrames.length} amostras capturadas com sucesso.`;
+        // Use the first frame as display photo
+        capturedDataUrl = capturedFrames[0].photo;
+        snapshot.src = capturedDataUrl;
+        snapshot.style.display = 'block';
+        video.style.display = 'none';
+        btnRetake.classList.remove('d-none');
+      } else {
+        statusEl.textContent = 'Não foi possível detectar rosto. Tentando foto simples...';
+        capturedDataUrl = takeSnapshotFromVideo();
+        if (capturedDataUrl) {
+          snapshot.src = capturedDataUrl;
+          snapshot.style.display = 'block';
+          video.style.display = 'none';
+          btnRetake.classList.remove('d-none');
+        }
+      }
+    }
+
+    // Initialize face API in background (non-blocking)
+    initFaceApi().then(success => {
+      if (success) {
+        console.log('Face API loaded successfully');
+      }
+    });
+
     function setLoading(loading) {
       const spinner = btnReg.querySelector('.spinner-border');
       const label = btnReg.querySelector('.label');
@@ -396,6 +527,7 @@ $ogImage   = $canonical . 'img/logo_login.png';
     });
     btnRetake.addEventListener('click', () => {
       capturedDataUrl = null;
+      capturedFrames = []; // Clear captured frames too
       snapshot.style.display = 'none';
       video.style.display = 'block';
       btnRetake.classList.add('d-none');
@@ -565,10 +697,20 @@ $ogImage   = $canonical . 'img/logo_login.png';
       try {
         statusEl.textContent = 'Tirando foto...';
 
-        // Tenta obter foto, mas não bloqueia caso não tenha
+        // Tenta capturar múltiplas amostras com face detection, senão foto simples
         if (!capturedDataUrl) {
-          if (stream) {
+          if (stream && faceApiLoaded) {
+            // Try multiple frame capture with face detection
+            await captureMultipleFrames();
+          } else if (stream) {
+            // Fallback to simple photo
             capturedDataUrl = takeSnapshotFromVideo();
+            if (capturedDataUrl) {
+              snapshot.src = capturedDataUrl;
+              snapshot.style.display = 'block';
+              video.style.display = 'none';
+              btnRetake.classList.remove('d-none');
+            }
           } else if (fileInput.files?.[0]) {
             capturedDataUrl = await fileToDataURL(fileInput.files[0], 1200, 0.85);
             snapshot.src = capturedDataUrl;
@@ -612,11 +754,25 @@ $ogImage   = $canonical . 'img/logo_login.png';
         const payload = {
           cpf,
           pin,
-          photo: capturedDataUrl || null,
           geo: geo || null,
           incomplete,
           reasons
         };
+
+        // Add photo(s) and face descriptors based on capture method
+        if (capturedFrames.length > 0) {
+          // Multiple frames captured with face descriptors
+          payload.photos = capturedFrames.map(frame => frame.photo);
+          payload.face_descriptors = capturedFrames.map(frame => frame.descriptor);
+          payload.photo = capturedFrames[0].photo; // Backward compatibility
+        } else if (capturedDataUrl) {
+          // Single photo (backward compatibility)
+          payload.photo = capturedDataUrl;
+          payload.photos = [capturedDataUrl];
+        } else {
+          // No photo
+          payload.photo = null;
+        }
 
         statusEl.textContent = 'Enviando...';
         let onlineOk = false,

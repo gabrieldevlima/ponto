@@ -301,6 +301,16 @@ function sort_link(string $key, string $label): string
                     <i class="bi bi-pencil"></i> <span class="d-none d-md-inline">Editar</span>
                   </a>
 
+                  <?php if (is_network_admin($admin)): ?>
+                  <a href="teacher_schools.php?teacher_id=<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-secondary" title="Vincular Escolas">
+                    <i class="bi bi-building"></i> <span class="d-none d-md-inline">Escolas</span>
+                  </a>
+                  <?php endif; ?>
+
+                  <a href="capture_face.php?id=<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-info" title="Capturar Face">
+                    <i class="bi bi-camera"></i> <span class="d-none d-md-inline">Face</span>
+                  </a>
+
                   <form action="<?= htmlspecialchars(keep_params(), ENT_QUOTES, 'UTF-8') ?>" method="post" class="d-inline">
                     <input type="hidden" name="action" value="toggle">
                     <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">

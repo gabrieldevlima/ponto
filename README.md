@@ -38,6 +38,12 @@ ATENÇÃO
 5. Registro de ponto:
    - Professores acessam a página inicial (`/index.php`).
    - Podem registrar entrada/saída via reconhecimento facial ou por PIN (e-mail + PIN).
+   - **Captura múltipla:** O sistema agora captura até 5 frames da câmera automaticamente para maior robustez na detecção facial, melhorando a precisão do reconhecimento.
+
+## Melhorias Recentes
+- **Múltiplos descritores faciais:** O check-in agora captura até 5 amostras por registro, aumentando a confiabilidade.
+- **Best-of-N no servidor:** O backend analisa múltiplas fotos e seleciona a de melhor qualidade automaticamente.
+- **Navegação aprimorada:** Administradores podem facilmente gerenciar vínculos professor-escola através da interface.
 
 ## Observações de Segurança
 - Use HTTPS em produção (requerido para câmera).
@@ -61,7 +67,8 @@ Se preferir, hospede os modelos localmente e mude a URL em `index.php` e `captur
   - index.php: página de ponto (face/PIN)
   - admin/
     - login.php, logout.php, dashboard.php
-    - teachers.php, teacher_form.php, capture_face.php, attendance.php
+    - teachers.php, teacher_form.php, capture_face.php, teacher_schools.php, attendance.php
+    - schools.php: gerenciamento de escolas (admin de rede)
 - api/
   - checkin.php: bater ponto (face ou PIN)
   - save_face.php: salvar descritor facial do professor (admin)
