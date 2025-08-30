@@ -1,122 +1,127 @@
--- ============================================================
--- Sistema de Ponto - Instalação Completa (MySQL/MariaDB)
--- Cria todas as tabelas necessárias e popula dados básicos.
--- Compatível com colaboradores de diferentes tipos, rotina por aulas/horário,
--- registros manuais com justificativa e relatórios com aprovação.
---
--- Observações:
--- - Execute este script dentro do banco já selecionado (ex.: USE ponto;)
--- - Charset: utf8mb4
--- - Admin padrão (opcional): usuário "admin" com senha "admin123"
--- ============================================================
+-- SQL Schema (MySQL 5.7+/8.0+ or MariaDB 10.3+) for the Attendance/HR system
+-- Character set/collation: utf8mb4 recommended
 
--- Recomendado (opcional):
--- SET NAMES utf8mb4;
--- SET time_zone = '+00:00';
+-- Optional: choose your database
+-- CREATE DATABASE IF NOT EXISTS your_database_name CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- USE your_database_name;
 
--- ============================================================
--- Tabela de administradores
--- ============================================================
+SET NAMES utf8mb4;
+SET time_zone = '+00:00';
+
+-- =========================================
+-- Core entities
+-- =========================================
+
+-- Schools
+CREATE TABLE IF NOT EXISTS schools (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(150) NOT NULL,
+  code VARCHAR(50) NOT NULL UNIQUE,
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Admin users
 CREATE TABLE IF NOT EXISTS admins (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  username VARCHAR(100) NOT NULL,
+  username VARCHAR(100) UNIQUE NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
+  role ENUM('network_admin','school_admin') NOT NULL DEFAULT 'network_admin',
+  school_id INT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_admin_username (username)
+  CONSTRAINT fk_admin_school FOREIGN KEY (school_id) REFERENCES schools(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Admin padrão (senha: admin123)
--- Altere após o primeiro login!
-INSERT INTO admins (username, password_hash)
-SELECT 'admin', '$2y$10$uQ8Fyv1I3VzBkYOPxfN3XO3xaQa58aeGeq/QAdzTZziEtGlUZEMyW'
-WHERE NOT EXISTS (SELECT 1 FROM admins WHERE username = 'admin');
+CREATE INDEX idx_admin_role ON admins(role);
+CREATE INDEX idx_admin_school ON admins(school_id);
 
--- ============================================================
--- Tipos de colaboradores
--- schedule_mode: 'none' (sem rotina), 'classes' (aulas), 'time' (horário)
--- requires_schedule: mantido por compatibilidade (deriva de schedule_mode <> 'none')
--- ============================================================
+-- Collaborator (employee) types
 CREATE TABLE IF NOT EXISTS collaborator_types (
-  id TINYINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  slug VARCHAR(50) NOT NULL,
-  name VARCHAR(100) NOT NULL,
-  schedule_mode ENUM('none','classes','time') NOT NULL DEFAULT 'none',
-  requires_schedule TINYINT(1) NOT NULL DEFAULT 0,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_collaborator_types_slug (slug)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Tipos padrão (idempotente)
-INSERT INTO collaborator_types (slug, name, schedule_mode, requires_schedule)
-VALUES
-  ('teacher',     'Professor',    'classes', 1),
-  ('director',    'Diretor',      'time',    1),
-  ('secretary',   'Secretário',   'time',    1),
-  ('driver',      'Motorista',    'time',    1),
-  ('coordinator', 'Coordenador',  'time',    1),
-  ('admin_staff', 'Administrativo','time',   1),
-  ('assistant',   'Auxiliar',     'time',    1)
-ON DUPLICATE KEY UPDATE
-  name = VALUES(name),
-  schedule_mode = VALUES(schedule_mode),
-  requires_schedule = VALUES(requires_schedule);
-
--- ============================================================
--- Colaboradores (mantido nome 'teachers' por compatibilidade)
--- ============================================================
-CREATE TABLE IF NOT EXISTS teachers (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  name VARCHAR(120) NOT NULL,
-  cpf VARCHAR(14) NOT NULL,
-  pin_hash VARCHAR(255) NOT NULL,
-  email VARCHAR(120),
-  active TINYINT(1) NOT NULL DEFAULT 1,
-  type_id TINYINT UNSIGNED NOT NULL DEFAULT 1,
-  face_descriptors LONGTEXT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
-  CONSTRAINT uq_teachers_cpf UNIQUE (cpf),
-  CONSTRAINT fk_teachers_type FOREIGN KEY (type_id) REFERENCES collaborator_types(id)
+  name VARCHAR(100) NOT NULL,
+  slug VARCHAR(50) NOT NULL UNIQUE,
+  schedule_mode ENUM('none','classes','time') NOT NULL DEFAULT 'classes',
+  requires_schedule TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE INDEX idx_teachers_type_active ON teachers(type_id, active);
-CREATE INDEX idx_teachers_name ON teachers(name);
-
--- ============================================================
--- Motivos para inserção manual de pontos
--- ============================================================
+-- Manual reasons for attendance adjustments
 CREATE TABLE IF NOT EXISTS manual_reasons (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(150) NOT NULL,
   active TINYINT(1) NOT NULL DEFAULT 1,
   sort_order INT NOT NULL DEFAULT 0,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Motivos padrão (idempotente)
-INSERT INTO manual_reasons (name, active, sort_order)
-VALUES
-  ('Falta de internet', 1, 10),
-  ('Falha no sistema', 1, 20),
-  ('Esquecimento do colaborador', 1, 30),
-  ('Outro', 1, 100)
-ON DUPLICATE KEY UPDATE
-  active = VALUES(active),
-  sort_order = VALUES(sort_order);
+-- Collaborators (kept as "teachers" for compatibility)
+CREATE TABLE IF NOT EXISTS teachers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  cpf VARCHAR(14) NOT NULL UNIQUE,
+  pin_hash VARCHAR(255) NOT NULL,
+  email VARCHAR(120),
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  type_id INT NULL,
+  base_salary DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  network_wide TINYINT(1) NOT NULL DEFAULT 0, -- acts on whole network
+  face_descriptors JSON NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_teachers_type FOREIGN KEY (type_id) REFERENCES collaborator_types(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ============================================================
--- Registros de ponto
--- - approved: 1=aprovado, 0=rejeitado
--- - Campos "manual_*" para inserções manuais (motivo, admin, data)
--- ============================================================
+CREATE INDEX idx_teachers_type ON teachers(type_id);
+CREATE INDEX idx_teachers_active ON teachers(active);
+CREATE INDEX idx_teachers_name ON teachers(name);
+
+-- N:N relation between teachers and schools
+CREATE TABLE IF NOT EXISTS teacher_schools (
+  teacher_id INT NOT NULL,
+  school_id INT NOT NULL,
+  PRIMARY KEY (teacher_id, school_id),
+  CONSTRAINT fk_ts_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ts_school FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_ts_teacher ON teacher_schools(teacher_id);
+CREATE INDEX idx_ts_school ON teacher_schools(school_id);
+
+-- Weekly schedule by number of classes (for schedule_mode='classes')
+CREATE TABLE IF NOT EXISTS teacher_schedules (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  teacher_id INT NOT NULL,
+  weekday TINYINT(1) NOT NULL, -- 0=Sun,1=Mon,...,6=Sat
+  classes_count INT NOT NULL DEFAULT 0,
+  class_minutes INT NOT NULL DEFAULT 60,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_teacher_weekday (teacher_id, weekday),
+  CONSTRAINT fk_schedule_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Weekly schedule by time (for schedule_mode='time')
+CREATE TABLE IF NOT EXISTS collaborator_time_schedules (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  teacher_id INT NOT NULL,
+  weekday TINYINT(1) NOT NULL,
+  start_time TIME NULL,
+  end_time TIME NULL,
+  break_minutes INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_time_teacher_weekday (teacher_id, weekday),
+  CONSTRAINT fk_time_schedule_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Attendance records
 CREATE TABLE IF NOT EXISTS attendance (
   id INT AUTO_INCREMENT PRIMARY KEY,
   teacher_id INT NOT NULL,
+  school_id INT NULL,
   date DATE NOT NULL,
   check_in DATETIME DEFAULT NULL,
   check_out DATETIME DEFAULT NULL,
-  method VARCHAR(20) DEFAULT NULL,           -- 'pin' | 'manual' | outros
+  method VARCHAR(20) DEFAULT NULL,                -- pin, manual, etc.
   ip VARCHAR(50) DEFAULT NULL,
   user_agent VARCHAR(255) DEFAULT NULL,
   check_in_lat DOUBLE DEFAULT NULL,
@@ -125,46 +130,157 @@ CREATE TABLE IF NOT EXISTS attendance (
   check_out_lat DOUBLE DEFAULT NULL,
   check_out_lng DOUBLE DEFAULT NULL,
   check_out_acc DOUBLE DEFAULT NULL,
-  photo VARCHAR(255) DEFAULT NULL,           -- armazena o nome do arquivo salvo
-  approved TINYINT(1) NOT NULL DEFAULT 1,
+  photo VARCHAR(255) DEFAULT NULL,
+  approved TINYINT(1) DEFAULT NULL,               -- null=pending, 1=approved, 0=rejected
   manual_reason_id INT NULL,
   manual_reason_text VARCHAR(255) NULL,
   manual_by_admin_id INT NULL,
   manual_created_at DATETIME NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  CONSTRAINT fk_attendance_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id),
-  CONSTRAINT fk_attendance_manual_reason FOREIGN KEY (manual_reason_id) REFERENCES manual_reasons(id) ON DELETE SET NULL ON UPDATE CASCADE,
-  CONSTRAINT fk_attendance_manual_admin FOREIGN KEY (manual_by_admin_id) REFERENCES admins(id) ON DELETE SET NULL ON UPDATE CASCADE
+  CONSTRAINT fk_att_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id),
+  CONSTRAINT fk_att_manual_reason FOREIGN KEY (manual_reason_id) REFERENCES manual_reasons(id),
+  CONSTRAINT fk_att_manual_admin FOREIGN KEY (manual_by_admin_id) REFERENCES admins(id),
+  CONSTRAINT fk_att_school FOREIGN KEY (school_id) REFERENCES schools(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_attendance_teacher_date ON attendance(teacher_id, date);
 CREATE INDEX idx_attendance_manual ON attendance(manual_reason_id, manual_by_admin_id);
+CREATE INDEX idx_attendance_school ON attendance(school_id);
+CREATE INDEX idx_attendance_approved ON attendance(approved);
+CREATE INDEX idx_attendance_date ON attendance(date);
 
--- ============================================================
--- Rotina semanal genérica (suporta aulas e horário)
--- - weekday: 0=Dom, 1=Seg, ... 6=Sáb
--- - Para professores (schedule_mode='classes'): usar classes_count e class_minutes
--- - Para demais (schedule_mode='time'): usar start_time, end_time e break_minutes
--- ============================================================
-CREATE TABLE IF NOT EXISTS collaborator_schedules (
+-- =========================================
+-- Leaves / Absences
+-- =========================================
+
+-- Leave types (absences, licenses, vacations, etc.)
+CREATE TABLE IF NOT EXISTS leave_types (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  teacher_id INT NOT NULL,
-  weekday TINYINT(1) NOT NULL,          -- 0..6
-  classes_count INT NULL DEFAULT 0,     -- modo classes
-  class_minutes INT NULL DEFAULT 60,    -- modo classes
-  start_time TIME NULL,                 -- modo time
-  end_time TIME NULL,                   -- modo time
-  break_minutes INT NULL DEFAULT 0,     -- modo time
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_collab_weekday (teacher_id, weekday),
-  CONSTRAINT fk_collab_schedule_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
+  name VARCHAR(100) NOT NULL,
+  code VARCHAR(50) NOT NULL UNIQUE,         -- e.g., ABONO, AFAST, FERIAS, LICENCA
+  paid TINYINT(1) NOT NULL DEFAULT 1,       -- remunerated?
+  affects_bank TINYINT(1) NOT NULL DEFAULT 0, -- affects hour bank?
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ============================================================
--- FIM
--- Após importar:
--- - Acesse /admin com usuário "admin" e senha "admin123" e troque a senha.
--- - Cadastre colaboradores, defina tipos e rotinas (aulas ou horários).
--- - Configure motivos adicionais em "Motivos" se necessário.
--- ============================================================
+-- Leaves
+CREATE TABLE IF NOT EXISTS leaves (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  teacher_id INT NOT NULL,
+  school_id INT NULL,
+  type_id INT NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  notes VARCHAR(255) NULL,
+  approved TINYINT(1) DEFAULT NULL, -- null=pending, 1=approved, 0=rejected
+  created_by_admin_id INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_leave_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id),
+  CONSTRAINT fk_leave_school FOREIGN KEY (school_id) REFERENCES schools(id),
+  CONSTRAINT fk_leave_type FOREIGN KEY (type_id) REFERENCES leave_types(id),
+  CONSTRAINT fk_leave_admin FOREIGN KEY (created_by_admin_id) REFERENCES admins(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_leaves_teacher ON leaves(teacher_id);
+CREATE INDEX idx_leaves_type ON leaves(type_id);
+CREATE INDEX idx_leaves_approved ON leaves(approved);
+CREATE INDEX idx_leaves_dates ON leaves(start_date, end_date);
+
+-- =========================================
+-- Hour bank and audit
+-- =========================================
+
+-- Hour bank entries
+CREATE TABLE IF NOT EXISTS hour_bank_entries (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  teacher_id INT NOT NULL,
+  school_id INT NULL,
+  date DATE NOT NULL,
+  minutes INT NOT NULL, -- +credit, -debit
+  reason VARCHAR(150) NULL,
+  source ENUM('auto','manual') NOT NULL DEFAULT 'manual',
+  ref_attendance_id INT NULL,
+  created_by_admin_id INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_hb_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id),
+  CONSTRAINT fk_hb_school FOREIGN KEY (school_id) REFERENCES schools(id),
+  CONSTRAINT fk_hb_att FOREIGN KEY (ref_attendance_id) REFERENCES attendance(id),
+  CONSTRAINT fk_hb_admin FOREIGN KEY (created_by_admin_id) REFERENCES admins(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_hour_bank_teacher_date ON hour_bank_entries(teacher_id, date);
+CREATE INDEX idx_hour_bank_source ON hour_bank_entries(source);
+
+-- Audit logs
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  admin_id INT NULL,
+  action VARCHAR(80) NOT NULL,       -- create, update, delete, login, logout
+  entity VARCHAR(80) NOT NULL,       -- teacher, attendance, school, leave, admin, etc.
+  entity_id VARCHAR(64) NULL,
+  payload JSON NULL,
+  ip VARCHAR(50) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_audit_admin FOREIGN KEY (admin_id) REFERENCES admins(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_audit_entity ON audit_logs(entity, entity_id);
+CREATE INDEX idx_audit_admin ON audit_logs(admin_id);
+CREATE INDEX idx_audit_created ON audit_logs(created_at);
+
+-- =========================================
+-- Settings and permissions
+-- =========================================
+
+-- Fine-grained permissions (optional baseline)
+CREATE TABLE IF NOT EXISTS permissions (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  role ENUM('network_admin','school_admin') NOT NULL,
+  perm_key VARCHAR(120) NOT NULL,   -- e.g., 'leaves.manage', 'exports.xlsx'
+  allow TINYINT(1) NOT NULL DEFAULT 1,
+  UNIQUE KEY uq_role_perm (role, perm_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- App settings / key-value store
+CREATE TABLE IF NOT EXISTS app_settings (
+  k VARCHAR(100) PRIMARY KEY,
+  v VARCHAR(255) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- =========================================
+-- Seeds / defaults
+-- =========================================
+
+-- Collaborator types (idempotent)
+INSERT IGNORE INTO collaborator_types (id, name, slug, schedule_mode, requires_schedule) VALUES
+  (1, 'Professor', 'teacher', 'classes', 1),
+  (2, 'Diretor', 'director', 'time', 1),
+  (3, 'Secretário', 'secretary', 'time', 1),
+  (4, 'Motorista', 'driver', 'time', 1),
+  (5, 'Coordenador', 'coordinator', 'time', 1),
+  (6, 'Administrativo', 'administrative', 'time', 1),
+  (7, 'Auxiliar', 'assistant', 'time', 1);
+
+-- Manual reasons (idempotent)
+INSERT IGNORE INTO manual_reasons (id, name, active, sort_order) VALUES
+  (1, 'Falta de internet', 1, 10),
+  (2, 'Falha no sistema', 1, 20),
+  (3, 'Esquecimento do colaborador', 1, 30),
+  (4, 'Outro', 1, 100);
+
+-- Default app settings (idempotent)
+INSERT IGNORE INTO app_settings (k, v) VALUES
+  ('tolerance_minutes', '5');
+
+-- Common leave types (optional baseline; idempotent)
+INSERT IGNORE INTO leave_types (id, name, code, paid, affects_bank, active) VALUES
+  (1, 'Abono', 'ABONO', 1, 0, 1),
+  (2, 'Afastamento', 'AFAST', 0, 1, 1),
+  (3, 'Férias', 'FERIAS', 1, 0, 1),
+  (4, 'Licença', 'LICENCA', 1, 0, 1);
+
+-- Note: Default admin creation (username 'admin' with a password) should be handled by application logic
+-- to ensure hashing (see ensure_default_admin in the app). This script intentionally does not insert a plaintext password.
+
+-- EOF

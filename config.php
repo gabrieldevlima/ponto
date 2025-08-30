@@ -32,5 +32,5 @@ function db(): PDO {
 }
 
 require_once __DIR__ . '/helpers.php';
-// Opcional: inicializar admin padrão se não existir
-// ensure_default_admin();
+// Inicializa admin padrão no primeiro acesso (dev). Em produção, remova após criar seu admin.
+ensure_default_admin();

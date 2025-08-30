@@ -9,7 +9,7 @@ $stmt->execute([$id]);
 $teacher = $stmt->fetch();
 if (!$teacher) {
     http_response_code(404);
-    exit('Colaborador não encontrado.');
+    exit('Professor não encontrado.');
 }
 $scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
 $appBase = preg_replace('#/public(?:/.*)?$#', '', $scriptDir);
@@ -27,19 +27,12 @@ if ($appBase === '') { $appBase = '/'; }
   <style>video, canvas { max-width: 100%; border-radius: 8px; }</style>
 </head>
 <body>
-<nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
-  <div class="container-fluid">
+<nav class="navbar navbar-expand-lg bg-body-tertiary mb-4">
+  <div class="container">
     <a class="navbar-brand" href="dashboard.php">Admin</a>
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#adminNavbar"><span class="navbar-toggler-icon"></span></button>
-    <div class="collapse navbar-collapse" id="adminNavbar">
-      <ul class="navbar-nav me-auto">
-        <li class="nav-item"><a class="nav-link" href="attendances.php">Registros</a></li>
-        <li class="nav-item"><a class="nav-link" href="teachers.php">Colaboradores</a></li>
-        <li class="nav-item"><a class="nav-link" href="attendance_manual.php"><i class="bi bi-plus-circle"></i> Inserir Ponto Manual</a></li>
-        <li class="nav-item"><a class="nav-link" href="manual_reasons.php"><i class="bi bi-list-check"></i> Motivos</a></li>
-        <li class="nav-item"><a class="nav-link" href="collaborator_types.php"><i class="bi bi-people"></i> Tipos</a></li>
-      </ul>
-      <a class="btn btn-outline-light" href="logout.php">Sair</a>
+    <div class="ms-auto">
+      <a class="btn btn-outline-secondary me-2" href="teachers.php">Professores</a>
+      <a class="btn btn-outline-danger" href="logout.php">Sair</a>
     </div>
   </div>
 </nav>
@@ -146,7 +139,7 @@ async function capture() {
     const li = document.createElement('li');
     li.textContent = 'Amostra ' + samples.length + ' coletada.';
     samplesEl.appendChild(li);
-    countEl.textContent = String(samples.length);
+    countEl.textContent = samples.length.toString();
     statusEl.textContent = 'Amostra coletada.';
   } catch (e) {
     statusEl.textContent = 'Erro ao detectar rosto: ' + e.message;

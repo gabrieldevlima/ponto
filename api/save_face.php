@@ -26,8 +26,7 @@ if (!is_array($input)) {
     exit;
 }
 
-// Aceita collaborator_id como alias para teacher_id
-$teacher_id = (int)($input['teacher_id'] ?? ($input['collaborator_id'] ?? 0));
+$teacher_id = (int)($input['teacher_id'] ?? 0);
 $descriptors = $input['descriptors'] ?? null;
 
 if ($teacher_id <= 0 || !is_array($descriptors) || empty($descriptors)) {
@@ -36,7 +35,7 @@ if ($teacher_id <= 0 || !is_array($descriptors) || empty($descriptors)) {
     exit;
 }
 
-foreach ((array)$descriptors as $d) {
+foreach ($descriptors as $d) {
     if (!is_array($d)) {
         http_response_code(400);
         echo json_encode(['status'=>'error','message'=>'Formato de descritor inválido']);
@@ -50,7 +49,7 @@ $stmt->execute([$teacher_id]);
 $row = $stmt->fetch();
 if (!$row) {
     http_response_code(404);
-    echo json_encode(['status'=>'error','message'=>'Colaborador não encontrado']);
+    echo json_encode(['status'=>'error','message'=>'Professor não encontrado']);
     exit;
 }
 
