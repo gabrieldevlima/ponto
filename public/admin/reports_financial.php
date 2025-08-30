@@ -310,7 +310,8 @@ if ($export === 'csv' && $teacher) {
 
             <div class="card">
                 <div class="card-body">
-                    <h5 class="mb-3">Financeiro - <?= esc($teacher['name']) ?> - <?= esc((new DateTime($month . '-01'))->format('m/Y')) ?></h5>
+                    <h5 class="mb-1">Financeiro - <?= esc($teacher['name']) ?> - <?= esc((new DateTime($month . '-01'))->format('m/Y')) ?></h5>
+                    <small class="text-muted mb-3 d-block">Apenas registros aprovados são considerados nos cálculos</small>
                     <div class="row g-3 mb-3">
                         <div class="col-md-3">
                             <div class="border rounded p-3 bg-light h-100">

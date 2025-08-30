@@ -178,7 +178,10 @@ $fmtTime = static function ($val) {
     </tr>
   </table>
 
-  <div class="footer">Gerado em <?= date('d/m/Y H:i') ?></div>
+  <div class="footer">
+    Gerado em <?= date('d/m/Y H:i') ?><br>
+    <strong>Nota:</strong> Apenas registros aprovados são considerados nos cálculos.
+  </div>
 </body>
 
 </html>

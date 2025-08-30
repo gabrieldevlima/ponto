@@ -135,6 +135,9 @@ $weekdays = [0=>'Dom',1=>'Seg',2=>'Ter',3=>'Qua',4=>'Qui',5=>'Sex',6=>'Sáb'];
     <?php endif; ?>
   <?php endif; ?>
 
-  <div class="small muted" style="margin-top: 10px;">Gerado em <?= date('d/m/Y H:i') ?></div>
+  <div class="small muted" style="margin-top: 10px;">
+    Gerado em <?= date('d/m/Y H:i') ?><br>
+    <strong>Nota:</strong> Este relatório considera apenas registros aprovados.
+  </div>
 </body>
 </html>

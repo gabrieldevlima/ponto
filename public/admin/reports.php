@@ -113,7 +113,8 @@ if ($selectedTeacher) {
 }
 
 if ($selectedTeacher) {
-    $st = $pdo->prepare("SELECT a.*, mr.name AS manual_reason_name FROM attendance a LEFT JOIN manual_reasons mr ON mr.id = a.manual_reason_id WHERE a.teacher_id = ? AND a.date BETWEEN ? AND ? ORDER BY a.date ASC, a.check_in ASC");
+    // Para relatórios oficiais, carregar apenas registros aprovados
+    $st = $pdo->prepare("SELECT a.*, mr.name AS manual_reason_name FROM attendance a LEFT JOIN manual_reasons mr ON mr.id = a.manual_reason_id WHERE a.teacher_id = ? AND a.date BETWEEN ? AND ? AND a.approved = 1 ORDER BY a.date ASC, a.check_in ASC");
     $st->execute([$selectedTeacher['id'], $periodStart->format('Y-m-d'), $periodEnd->format('Y-m-d')]);
     while ($row = $st->fetch(PDO::FETCH_ASSOC)) {
         $dateStr = $row['date'];
@@ -244,7 +245,8 @@ function build_url_with(array $extra): string {
         <?php if ($selectedTeacher): ?>
             <div class="card shadow-sm">
                 <div class="card-body">
-                    <h4 class="mb-3">Relatório Mensal - <?= esc($selectedTeacher['name']) ?> - <?= esc((new DateTime($month . '-01'))->format('m/Y')) ?></h4>
+                    <h4 class="mb-1">Relatório Mensal - <?= esc($selectedTeacher['name']) ?> - <?= esc((new DateTime($month . '-01'))->format('m/Y')) ?></h4>
+                    <small class="text-muted">Apenas registros aprovados são considerados nos totais</small>
                     <div class="row g-3 mb-3">
                         <div class="col-md-4">
                             <div class="border rounded p-3 bg-light">

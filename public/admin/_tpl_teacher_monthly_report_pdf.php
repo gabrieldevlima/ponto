@@ -143,7 +143,10 @@ if (!function_exists('minutes_to_hhmm')) {
     </tfoot>
   </table>
 
-  <div class="footer">Gerado em <?= date('d/m/Y H:i') ?></div>
+  <div class="footer">
+    Gerado em <?= date('d/m/Y H:i') ?><br>
+    <strong>Nota:</strong> Apenas registros aprovados são considerados.
+  </div>
 </body>
 
 </html>

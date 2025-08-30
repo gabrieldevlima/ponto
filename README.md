@@ -66,4 +66,18 @@ Se preferir, hospede os modelos localmente e mude a URL em `index.php` e `captur
   - checkin.php: bater ponto (face ou PIN)
   - save_face.php: salvar descritor facial do professor (admin)
 
+## Relatórios e Exportações
+**Importante**: Todos os relatórios oficiais e exportações (PDF/CSV/XLSX) consideram apenas registros com status aprovado (`approved = 1`).
+
+- Registros pendentes ou rejeitados não são incluídos nos totalizadores oficiais
+- As telas de visualização podem mostrar todos os registros com seus respectivos status
+- Para auditoria, utilize o parâmetro `include_pendings=1` quando disponível (não afeta exportações)
+- Todos os PDFs gerados incluem uma nota informando que apenas registros aprovados são considerados
+
+### Arquivos de relatório:
+- `attendances.php`: Lista de registros com resumos semanais/mensais
+- `reports.php`: Relatório mensal por colaborador  
+- `teacher_monthly_report.php`: Relatório detalhado mensal
+- `reports_financial.php`: Cálculos financeiros e salários
+
 Bom uso!

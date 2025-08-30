@@ -113,11 +113,14 @@ foreach ($rows as $r) {
 
   $saldo_min = $total_realizado_min - $total_esperado_min;
 
-  $semana = date('o-W', strtotime($r['date']));
-  $mes = date('Y-m', strtotime($r['date']));
-  foreach ([['chave' => $semana, 'tipo' => 'semana'], ['chave' => $mes, 'tipo' => 'mes']] as $info) {
-    $resumo[$info['tipo']][$info['chave']]['esperado'] = ($resumo[$info['tipo']][$info['chave']]['esperado'] ?? 0) + $total_esperado_min;
-    $resumo[$info['tipo']][$info['chave']]['realizado'] = ($resumo[$info['tipo']][$info['chave']]['realizado'] ?? 0) + $total_realizado_min;
+  // Totais oficiais incluem apenas registros aprovados (approved = 1)
+  if ((int)($r['approved'] ?? 0) === 1) {
+    $semana = date('o-W', strtotime($r['date']));
+    $mes = date('Y-m', strtotime($r['date']));
+    foreach ([['chave' => $semana, 'tipo' => 'semana'], ['chave' => $mes, 'tipo' => 'mes']] as $info) {
+      $resumo[$info['tipo']][$info['chave']]['esperado'] = ($resumo[$info['tipo']][$info['chave']]['esperado'] ?? 0) + $total_esperado_min;
+      $resumo[$info['tipo']][$info['chave']]['realizado'] = ($resumo[$info['tipo']][$info['chave']]['realizado'] ?? 0) + $total_realizado_min;
+    }
   }
 
   $location_in = (!empty($r['check_in_lat']) && !empty($r['check_in_lng'])) ? [floatval($r['check_in_lat']), floatval($r['check_in_lng'])] : null;
@@ -134,13 +137,22 @@ foreach ($rows as $r) {
   $relatorio[] = $r;
 }
 
-// Exportação PDF com Dompdf
+// Exportação PDF com Dompdf - sempre filtra apenas registros aprovados
 if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
+  // Para PDF, filtrar apenas registros aprovados independente do filtro da tela
+  $approved_relatorio = array_filter($relatorio, function($r) {
+    return (int)($r['approved'] ?? 0) === 1;
+  });
+  
   $autoload = __DIR__ . '/../../vendor/autoload.php';
   if (file_exists($autoload)) {
     require_once $autoload;
     ob_start();
+    // Substitui temporariamente $relatorio por versão filtrada para PDF
+    $original_relatorio = $relatorio;
+    $relatorio = $approved_relatorio;
     include __DIR__ . '/_tpl_attendances_pdf.php';
+    $relatorio = $original_relatorio; // Restaura versão original
     $html = ob_get_clean();
     $dompdf = new \Dompdf\Dompdf();
     $dompdf->loadHtml($html);
@@ -603,6 +615,7 @@ function build_url_with(array $extra): string
         <div class="card shadow-sm mb-3">
           <div class="card-header bg-primary text-white">
             <h5 class="mb-0"><i class="bi bi-calendar-week"></i> Resumo Semanal</h5>
+            <small class="text-light opacity-75">Apenas registros aprovados</small>
           </div>
           <div class="card-body">
             <?php foreach (($resumo['semana'] ?? []) as $semana => $totais): ?>
@@ -624,6 +637,7 @@ function build_url_with(array $extra): string
         <div class="card shadow-sm mb-3">
           <div class="card-header bg-success text-white">
             <h5 class="mb-0"><i class="bi bi-calendar-month"></i> Resumo Mensal</h5>
+            <small class="text-light opacity-75">Apenas registros aprovados</small>
           </div>
           <div class="card-body">
             <?php foreach (($resumo['mes'] ?? []) as $mes => $totais): ?>
