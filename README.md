@@ -45,6 +45,9 @@ ATENÇÃO
 - Limite IP/ACLs do painel admin.
 - Ajuste a sensibilidade do reconhecimento alterando a constante FACE_MATCH_THRESHOLD em `api/checkin.php` (padrão 0.5 ~ 0.6 é razoável).
 
+## Testes e QA
+📋 **[Checklist de QA Completo](docs/QA_CHECKLIST.md)** - Roteiro detalhado para validação de todas as funcionalidades do sistema, incluindo dados de teste e cenários de uso.
+
 ## Dependências Front-end
 - Bootstrap via CDN.
 - face-api.js via CDN:
