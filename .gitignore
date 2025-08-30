@@ -1,0 +1,26 @@
+# Test files
+/test/
+/tmp/
+
+# Database config (if local)
+config_local.php
+
+# Photos directory content (keep structure but not photos)
+public/photos/*
+!public/photos/.gitkeep
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+*.sql.backup

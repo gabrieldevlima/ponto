@@ -17,8 +17,12 @@ CREATE TABLE IF NOT EXISTS schools (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(150) NOT NULL,
   code VARCHAR(50) NOT NULL UNIQUE,
+  lat DECIMAL(10,7) NULL COMMENT 'Latitude for geolocation validation',
+  lng DECIMAL(10,7) NULL COMMENT 'Longitude for geolocation validation',
+  radius_m INT DEFAULT 300 COMMENT 'Radius in meters for geolocation validation',
   active TINYINT(1) NOT NULL DEFAULT 1,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Admin users
@@ -131,6 +135,9 @@ CREATE TABLE IF NOT EXISTS attendance (
   check_out_lng DOUBLE DEFAULT NULL,
   check_out_acc DOUBLE DEFAULT NULL,
   photo VARCHAR(255) DEFAULT NULL,
+  additional_photos_count INT DEFAULT 0 COMMENT 'Number of additional photos beyond the main one',
+  face_score DECIMAL(5,3) NULL COMMENT 'Best face recognition score from multiple descriptors',
+  validation_notes JSON NULL COMMENT 'Validation details including face and geo checks',
   approved TINYINT(1) DEFAULT NULL,               -- null=pending, 1=approved, 0=rejected
   manual_reason_id INT NULL,
   manual_reason_text VARCHAR(255) NULL,
@@ -148,6 +155,19 @@ CREATE INDEX idx_attendance_manual ON attendance(manual_reason_id, manual_by_adm
 CREATE INDEX idx_attendance_school ON attendance(school_id);
 CREATE INDEX idx_attendance_approved ON attendance(approved);
 CREATE INDEX idx_attendance_date ON attendance(date);
+
+-- Additional photos for attendance records (multiple photos per check-in)
+CREATE TABLE IF NOT EXISTS attendance_photos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  attendance_id INT NOT NULL,
+  filename VARCHAR(255) NOT NULL,
+  sha256 VARCHAR(64) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_att_photos_attendance FOREIGN KEY (attendance_id) REFERENCES attendance(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_attendance_photos_attendance ON attendance_photos(attendance_id);
+CREATE INDEX idx_attendance_photos_sha256 ON attendance_photos(sha256);
 
 -- =========================================
 -- Leaves / Absences

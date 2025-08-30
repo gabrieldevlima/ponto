@@ -16,21 +16,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
   $name = trim($_POST['name'] ?? '');
   $code = trim($_POST['code'] ?? '');
+  $lat = isset($_POST['lat']) && $_POST['lat'] !== '' ? (float)$_POST['lat'] : null;
+  $lng = isset($_POST['lng']) && $_POST['lng'] !== '' ? (float)$_POST['lng'] : null;
+  $radius_m = isset($_POST['radius_m']) && $_POST['radius_m'] !== '' ? (int)$_POST['radius_m'] : 300;
   $active = isset($_POST['active']) ? 1 : 0;
   if ($name === '' || $code === '') {
     $msg = 'Nome e código são obrigatórios.';
   } else {
     if ($id > 0) {
-      $st = $pdo->prepare("UPDATE schools SET name=?, code=?, active=? WHERE id=?");
-      $st->execute([$name, $code, $active, $id]);
-      audit_log('update', 'school', $id, ['name' => $name, 'code' => $code, 'active' => $active]);
+      $st = $pdo->prepare("UPDATE schools SET name=?, code=?, lat=?, lng=?, radius_m=?, active=? WHERE id=?");
+      $st->execute([$name, $code, $lat, $lng, $radius_m, $active, $id]);
+      audit_log('update', 'school', $id, ['name' => $name, 'code' => $code, 'lat' => $lat, 'lng' => $lng, 'radius_m' => $radius_m, 'active' => $active]);
       header('Location: school_edit.php?id=' . (int)$id . '&msg=' . urlencode('Instituição atualizada.'));
       exit;
     } else {
-      $st = $pdo->prepare("INSERT INTO schools (name, code, active) VALUES (?, ?, ?)");
-      $st->execute([$name, $code, $active]);
+      $st = $pdo->prepare("INSERT INTO schools (name, code, lat, lng, radius_m, active) VALUES (?, ?, ?, ?, ?, ?)");
+      $st->execute([$name, $code, $lat, $lng, $radius_m, $active]);
       $newId = (int)$pdo->lastInsertId();
-      audit_log('create', 'school', $newId, ['name' => $name, 'code' => $code, 'active' => $active]);
+      audit_log('create', 'school', $newId, ['name' => $name, 'code' => $code, 'lat' => $lat, 'lng' => $lng, 'radius_m' => $radius_m, 'active' => $active]);
       header('Location: schools.php?msg=' . urlencode('Instituição criada.'));
       exit;
     }
@@ -105,6 +108,23 @@ if ($id) {
             <label class="form-label">Código</label>
             <input class="form-control" name="code" required maxlength="50" value="<?= esc($row['code'] ?? '') ?>">
             <div class="form-text">Identificador único (ex: EMEF-CENTRO, ESC-A-01)</div>
+          </div>
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Latitude</label>
+              <input type="number" step="0.0000001" class="form-control" name="lat" value="<?= esc($row['lat'] ?? '') ?>" placeholder="-15.7942287">
+              <div class="form-text">Coordenada geográfica para validação de localização</div>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Longitude</label>
+              <input type="number" step="0.0000001" class="form-control" name="lng" value="<?= esc($row['lng'] ?? '') ?>" placeholder="-47.8821658">
+              <div class="form-text">Coordenada geográfica para validação de localização</div>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Raio de Validação (metros)</label>
+            <input type="number" min="50" max="5000" class="form-control" name="radius_m" value="<?= esc($row['radius_m'] ?? 300) ?>">
+            <div class="form-text">Distância máxima permitida para check-in (padrão: 300m)</div>
           </div>
           <div class="form-check mb-3">
             <input type="checkbox" class="form-check-input" id="active" name="active" <?= !isset($row['active']) || (int)$row['active'] === 1 ? 'checked' : '' ?>>

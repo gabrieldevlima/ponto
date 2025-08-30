@@ -119,6 +119,8 @@ $rows = $st->fetchAll(PDO::FETCH_ASSOC);
             <tr>
               <th>Nome</th>
               <th>Código</th>
+              <th>Localização</th>
+              <th>Raio (m)</th>
               <th>Status</th>
               <th style="width:160px;">Ações</th>
             </tr>
@@ -128,6 +130,14 @@ $rows = $st->fetchAll(PDO::FETCH_ASSOC);
               <tr>
                 <td><?= esc($r['name']) ?></td>
                 <td class="text-center"><code><?= esc($r['code']) ?></code></td>
+                <td class="text-center">
+                  <?php if ($r['lat'] && $r['lng']): ?>
+                    <small><?= esc(number_format((float)$r['lat'], 6)) ?>, <?= esc(number_format((float)$r['lng'], 6)) ?></small>
+                  <?php else: ?>
+                    <span class="text-muted">Não informado</span>
+                  <?php endif; ?>
+                </td>
+                <td class="text-center"><?= esc($r['radius_m'] ?? 300) ?></td>
                 <td class="text-center"><?= (int)$r['active'] === 1 ? '<span class="badge bg-success rounded-pill">Ativa</span>' : '<span class="badge bg-secondary rounded-pill">Inativa</span>' ?></td>
                 <td class="text-center">
                   <a class="btn btn-sm btn-outline-primary" href="school_edit.php?id=<?= (int)$r['id'] ?>">
@@ -138,7 +148,7 @@ $rows = $st->fetchAll(PDO::FETCH_ASSOC);
             <?php endforeach; ?>
             <?php if (empty($rows)): ?>
               <tr>
-                <td colspan="4" class="text-center text-muted">Nenhuma instituição cadastrada.</td>
+                <td colspan="6" class="text-center text-muted">Nenhuma instituição cadastrada.</td>
               </tr>
             <?php endif; ?>
           </tbody>

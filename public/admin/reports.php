@@ -113,7 +113,8 @@ if ($selectedTeacher) {
 }
 
 if ($selectedTeacher) {
-    $st = $pdo->prepare("SELECT a.*, mr.name AS manual_reason_name FROM attendance a LEFT JOIN manual_reasons mr ON mr.id = a.manual_reason_id WHERE a.teacher_id = ? AND a.date BETWEEN ? AND ? ORDER BY a.date ASC, a.check_in ASC");
+    // Only include approved attendance records for reports
+    $st = $pdo->prepare("SELECT a.*, mr.name AS manual_reason_name FROM attendance a LEFT JOIN manual_reasons mr ON mr.id = a.manual_reason_id WHERE a.teacher_id = ? AND a.date BETWEEN ? AND ? AND a.approved = 1 ORDER BY a.date ASC, a.check_in ASC");
     $st->execute([$selectedTeacher['id'], $periodStart->format('Y-m-d'), $periodEnd->format('Y-m-d')]);
     while ($row = $st->fetch(PDO::FETCH_ASSOC)) {
         $dateStr = $row['date'];

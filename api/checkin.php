@@ -3,6 +3,7 @@ ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
 require_once __DIR__ . '/../config.php';
+require_once __DIR__ . '/../lib/FaceRecognition.php';
 if (!headers_sent()) header('Content-Type: application/json');
 
 $tzBR = new DateTimeZone('America/Sao_Paulo');
@@ -169,6 +170,9 @@ if (!is_array($input)) {
 $cpf = preg_replace('/\D/', '', (string)($input['cpf'] ?? ''));
 $pin = (string)($input['pin'] ?? '');
 $photo = $input['photo'] ?? null;
+$photos = $input['photos'] ?? []; // New: array of additional photos
+$face_descriptor = $input['face_descriptor'] ?? null; // Existing single descriptor
+$face_descriptors = $input['face_descriptors'] ?? []; // New: array of descriptors
 $geo = $input['geo'] ?? null;
 
 if (!$pin) {
@@ -260,12 +264,15 @@ if ($action === 'entrada') {
     }
 }
 
-// Salva foto (opcional; diretório público é /public/photos)
+// Salva foto principal e fotos adicionais (opcional; diretório público é /public/photos)
 $dir = __DIR__ . '/../public/photos/';
 if (!is_dir($dir)) mkdir($dir, 0777, true);
 $filename = null;
 $photoQuality = null;
 $photoQualityOk = null;
+$additionalPhotos = [];
+
+// Processa foto principal
 if ($photo) {
     if (preg_match('#^data:image/[^;]+;base64,(.+)$#', (string)$photo, $m)) {
         $filename = 'foto_' . $teacherId . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(3)) . '.jpg';
@@ -281,12 +288,139 @@ if ($photo) {
         exit;
     }
 }
+
+// Processa fotos adicionais (limite de 5 fotos extras)
+if (!empty($photos) && is_array($photos)) {
+    $maxAdditionalPhotos = 5;
+    $photoCount = 0;
+    
+    foreach ($photos as $additionalPhoto) {
+        if ($photoCount >= $maxAdditionalPhotos) break;
+        
+        if (preg_match('#^data:image/[^;]+;base64,(.+)$#', (string)$additionalPhoto, $m)) {
+            $additionalFilename = 'foto_extra_' . $teacherId . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(3)) . '.jpg';
+            $additionalFilepath = $dir . $additionalFilename;
+            file_put_contents($additionalFilepath, base64_decode($m[1]));
+            
+            // Calcula SHA256 para auditoria
+            $sha256 = hash_file('sha256', $additionalFilepath);
+            $additionalPhotos[] = [
+                'filename' => $additionalFilename,
+                'sha256' => $sha256
+            ];
+            $photoCount++;
+        }
+    }
+}
+
 $photoUrl = $filename ? '/public/photos/' . $filename : null;
 
-// Aprovação automática somente se houver foto, localização e boa qualidade; senão fica pendente (NULL)
+// Face recognition - processa todos os descritores disponíveis
+$faceOk = false;
+$faceScore = null;
+$allDescriptors = [];
+
+// Coleta todos os descritores (individual + array)
+if ($face_descriptor && is_array($face_descriptor)) {
+    $allDescriptors[] = $face_descriptor;
+}
+if ($face_descriptors && is_array($face_descriptors)) {
+    foreach ($face_descriptors as $desc) {
+        if (is_array($desc)) {
+            $allDescriptors[] = $desc;
+        }
+    }
+}
+
+// Realiza comparação facial se há descritores
+if (!empty($allDescriptors)) {
+    // Busca descritores armazenados do professor
+    $stmt = $pdo->prepare("SELECT face_descriptors FROM teachers WHERE id = ?");
+    $stmt->execute([$teacherId]);
+    $teacherData = $stmt->fetch();
+    
+    if ($teacherData && !empty($teacherData['face_descriptors'])) {
+        $storedDescriptors = json_decode($teacherData['face_descriptors'], true);
+        
+        if (is_array($storedDescriptors) && !empty($storedDescriptors)) {
+            $faceResult = FaceRecognition::compareMultipleDescriptors($allDescriptors, $storedDescriptors, 0.6);
+            $faceOk = $faceResult['match'];
+            $faceScore = $faceResult['score'];
+        }
+    }
+}
+
+// Validação de localização (nova lógica com escolas)
+$geoOk = false;
+if ($lat !== null && $lng !== null) {
+    // Busca escolas vinculadas ao professor
+    $stmt = $pdo->prepare("
+        SELECT s.lat, s.lng, s.radius_m, s.name 
+        FROM teacher_schools ts 
+        JOIN schools s ON s.id = ts.school_id 
+        WHERE ts.teacher_id = ? AND s.active = 1 AND s.lat IS NOT NULL AND s.lng IS NOT NULL
+    ");
+    $stmt->execute([$teacherId]);
+    $schools = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Se professor é network_wide, considera todas as escolas ativas
+    $stmt = $pdo->prepare("SELECT network_wide FROM teachers WHERE id = ?");
+    $stmt->execute([$teacherId]);
+    $isNetworkWide = (int)$stmt->fetchColumn();
+    
+    if ($isNetworkWide) {
+        $stmt = $pdo->prepare("SELECT lat, lng, radius_m, name FROM schools WHERE active = 1 AND lat IS NOT NULL AND lng IS NOT NULL");
+        $stmt->execute();
+        $schools = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+    
+    // Verifica distância para cada escola
+    foreach ($schools as $school) {
+        $distance = calculateDistance($lat, $lng, (float)$school['lat'], (float)$school['lng']);
+        $allowedRadius = (int)($school['radius_m'] ?? 300);
+        
+        if ($distance <= $allowedRadius) {
+            $geoOk = true;
+            break;
+        }
+    }
+}
+
+// Aprovação automática: foto + localização + face OK + qualidade OK
 $hasPhoto = (bool)$filename;
 $hasGeo = ($lat !== null && $lng !== null);
-$approvedNow = ($hasPhoto && $hasGeo && ($photoQualityOk !== false)) ? 1 : null;
+$approvedNow = ($hasPhoto && $geoOk && $faceOk && ($photoQualityOk !== false)) ? 1 : null;
+
+// Prepara validation_notes para auditoria
+$validationNotes = [
+    'face' => [
+        'probes' => count($allDescriptors),
+        'best_score' => $faceScore,
+        'match' => $faceOk
+    ],
+    'geo' => [
+        'provided' => $hasGeo,
+        'valid' => $geoOk,
+        'lat' => $lat,
+        'lng' => $lng
+    ],
+    'photo' => [
+        'quality_ok' => $photoQualityOk,
+        'additional_count' => count($additionalPhotos)
+    ]
+];
+
+/**
+ * Calcula distância entre duas coordenadas usando fórmula de Haversine
+ */
+function calculateDistance($lat1, $lng1, $lat2, $lng2) {
+    $earthRadius = 6371000; // metros
+    $dLat = deg2rad($lat2 - $lat1);
+    $dLng = deg2rad($lng2 - $lng1);
+    $a = sin($dLat/2) * sin($dLat/2) + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLng/2) * sin($dLng/2);
+    $c = 2 * atan2(sqrt($a), sqrt(1-$a));
+    return $earthRadius * $c;
+}
 
 if ($action === 'entrada') {
     if ($open) {
@@ -295,10 +429,18 @@ if ($action === 'entrada') {
         exit;
     }
     $stmt = $pdo->prepare("INSERT INTO attendance
-        (teacher_id, date, check_in, method, ip, user_agent, check_in_lat, check_in_lng, check_in_acc, photo, approved)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)");
-    $stmt->execute([$teacherId, $today, $now, 'pin', $ip, $ua, $lat, $lng, $acc, $filename, $approvedNow]);
-    audit_log('create','attendance',$pdo->lastInsertId(),['teacher_id'=>$teacherId,'type'=>'checkin']);
+        (teacher_id, date, check_in, method, ip, user_agent, check_in_lat, check_in_lng, check_in_acc, photo, additional_photos_count, face_score, validation_notes, approved)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    $stmt->execute([$teacherId, $today, $now, 'pin', $ip, $ua, $lat, $lng, $acc, $filename, count($additionalPhotos), $faceScore, json_encode($validationNotes, JSON_UNESCAPED_UNICODE), $approvedNow]);
+    $attendanceId = $pdo->lastInsertId();
+    
+    // Salva fotos adicionais na tabela attendance_photos
+    foreach ($additionalPhotos as $additionalPhoto) {
+        $stmt = $pdo->prepare("INSERT INTO attendance_photos (attendance_id, filename, sha256) VALUES (?, ?, ?)");
+        $stmt->execute([$attendanceId, $additionalPhoto['filename'], $additionalPhoto['sha256']]);
+    }
+    
+    audit_log('create','attendance',$attendanceId,['teacher_id'=>$teacherId,'type'=>'checkin','additional_photos'=>count($additionalPhotos)]);
 
     $msg = 'Entrada registrada';
     if ($hasPhoto) $msg .= ' com foto';
@@ -341,18 +483,32 @@ if ($action === 'entrada') {
 
     $pdo->beginTransaction();
     try {
-      // Atualiza checkout; só substitui a foto se uma nova foi enviada
+      // Atualiza checkout; só substitui a foto e dados extras se novos foram enviados
       $photoSetSql = $filename ? "photo = ?, " : "";
+      $faceSetSql = $faceScore !== null ? "face_score = ?, " : "";
+      $photosSetSql = !empty($additionalPhotos) ? "additional_photos_count = ?, " : "";
+      $validationSetSql = "validation_notes = ?, ";
+      
       $sql = "UPDATE attendance
-              SET check_out = ?, check_out_lat = ?, check_out_lng = ?, check_out_acc = ?, updated_at = CURRENT_TIMESTAMP, {$photoSetSql}
+              SET check_out = ?, check_out_lat = ?, check_out_lng = ?, check_out_acc = ?, updated_at = CURRENT_TIMESTAMP, 
+                  {$photoSetSql}{$faceSetSql}{$photosSetSql}{$validationSetSql}
                   approved = CASE WHEN ? = 1 THEN 1 ELSE approved END
               WHERE id = ?";
       $params = [$now, $lat, $lng, $acc];
       if ($filename) $params[] = $filename;
+      if ($faceScore !== null) $params[] = $faceScore;
+      if (!empty($additionalPhotos)) $params[] = count($additionalPhotos);
+      $params[] = json_encode($validationNotes, JSON_UNESCAPED_UNICODE);
       $params[] = $approvedNow;
       $params[] = $open['id'];
       $stmt = $pdo->prepare($sql);
       $stmt->execute($params);
+      
+      // Salva fotos adicionais na tabela attendance_photos para o checkout
+      foreach ($additionalPhotos as $additionalPhoto) {
+          $stmt = $pdo->prepare("INSERT INTO attendance_photos (attendance_id, filename, sha256) VALUES (?, ?, ?)");
+          $stmt->execute([$open['id'], $additionalPhoto['filename'], $additionalPhoto['sha256']]);
+      }
 
       // Banco de horas automático (recalcula o delta do dia)
       $tolerance = (int)(get_setting('tolerance_minutes', '5') ?? '5');
