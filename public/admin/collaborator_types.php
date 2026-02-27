@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   if (!in_array($mode, ['none','classes','time'], true)) die('Modo inválido.');
 
   if ($id > 0) {
-    $st = $pdo->prepare("UPDATE collaborator_types SET name=?, slug=?, schedule_mode=?, requires_schedule = IF(?='none',0,1) WHERE id=?");
+    $st = $pdo->prepare("UPDATE collaborator_types SET name=?, slug=?, schedule_mode=?, requires_schedule = IF(? COLLATE utf8mb4_unicode_ci = 'none',0,1) WHERE id=?");
     $st->execute([$name, $slug, $mode, $mode, $id]);
     header('Location: collaborator_types.php?msg=' . urlencode('Tipo atualizado.'));
   } else {

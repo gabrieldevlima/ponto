@@ -14,7 +14,7 @@ $schoolFilter = isset($_GET['school']) ? (int)$_GET['school'] : 0;
 list($scopeSql, $scopeParams) = admin_scope_where('t');
 
 // Carrega colaboradores (aplica escopo e filtro escola p/ admin rede)
-$teachersSql = "SELECT t.id, t.name FROM teachers t WHERE t.active=1 AND $scopeSql";
+$teachersSql = "SELECT t.id, t.name, t.created_at FROM teachers t WHERE t.active=1 AND $scopeSql";
 $paramsTeachers = $scopeParams;
 if ($schoolFilter > 0 && is_network_admin($admin)) {
   $teachersSql .= " AND EXISTS (SELECT 1 FROM teacher_schools ts WHERE ts.teacher_id=t.id AND ts.school_id=?)";
@@ -33,7 +33,7 @@ if (!$month || !preg_match('/^\d{4}-\d{2}$/', $month)) {
 $selectedTeacher = null;
 $mode = 'classes';
 if ($teacherId) {
-    $sqlSel = "SELECT t.id, t.name, ct.schedule_mode
+    $sqlSel = "SELECT t.id, t.name, t.created_at, ct.schedule_mode
                FROM teachers t LEFT JOIN collaborator_types ct ON ct.id = t.type_id
                WHERE t.id = ? AND $scopeSql";
     $paramsSel = array_merge([$teacherId], $scopeParams);
@@ -113,7 +113,15 @@ if ($selectedTeacher) {
 }
 
 if ($selectedTeacher) {
-    $st = $pdo->prepare("SELECT a.*, mr.name AS manual_reason_name FROM attendance a LEFT JOIN manual_reasons mr ON mr.id = a.manual_reason_id WHERE a.teacher_id = ? AND a.date BETWEEN ? AND ? ORDER BY a.date ASC, a.check_in ASC");
+    // Somente registros aprovados contam para totais
+    $st = $pdo->prepare("
+      SELECT a.*, mr.name AS manual_reason_name, ed.username AS edited_by_username
+      FROM attendance a
+      LEFT JOIN manual_reasons mr ON mr.id = a.manual_reason_id
+      LEFT JOIN admins ed ON ed.id = a.editado_por
+      WHERE a.teacher_id = ? AND a.date BETWEEN ? AND ? AND a.approved = 1
+      ORDER BY a.date ASC, a.check_in ASC
+    ");
     $st->execute([$selectedTeacher['id'], $periodStart->format('Y-m-d'), $periodEnd->format('Y-m-d')]);
     while ($row = $st->fetch(PDO::FETCH_ASSOC)) {
         $dateStr = $row['date'];
@@ -176,7 +184,6 @@ if (($selectedTeacher) && (isset($_GET['export']) && $_GET['export'] === 'pdf'))
   }
 }
 
-// Helper para montar URL preservando filtros
 function build_url_with(array $extra): string {
   $q = $_GET;
   foreach ($extra as $k => $v) $q[$k] = $v;
@@ -242,6 +249,7 @@ function build_url_with(array $extra): string {
         </div>
 
         <?php if ($selectedTeacher): ?>
+            <?php $teacherStartDate = isset($selectedTeacher['created_at']) ? date('Y-m-d', strtotime($selectedTeacher['created_at'])) : '1900-01-01'; ?>
             <div class="card shadow-sm">
                 <div class="card-body">
                     <h4 class="mb-3">Relatório Mensal - <?= esc($selectedTeacher['name']) ?> - <?= esc((new DateTime($month . '-01'))->format('m/Y')) ?></h4>
@@ -254,7 +262,7 @@ function build_url_with(array $extra): string {
                         </div>
                         <div class="col-md-4">
                             <div class="border rounded p-3 bg-light">
-                                <div class="text-muted">Horas trabalhadas no mês</div>
+                                <div class="text-muted">Horas trabalhadas no mês (apenas aprovadas)</div>
                                 <div class="fs-4"><?= minutes_to_hhmm($totalWorkedMin) ?></div>
                             </div>
                         </div>
@@ -289,10 +297,19 @@ function build_url_with(array $extra): string {
                                                         <?php
                                                         $entrada = !empty($it['check_in']) ? (new DateTime($it['check_in']))->format('H:i:s') : '-';
                                                         $saida = !empty($it['check_out']) ? (new DateTime($it['check_out']))->format('H:i:s') : '-';
+                                                        $editTxt = '';
+                                                        if (!empty($it['data_edicao'])) {
+                                                          $editTxt = ' | Editado por ' . esc($it['edited_by_username'] ?? ('#' . (int)($it['editado_por'] ?? 0))) .
+                                                                     ' em ' . esc(date('d/m/Y H:i', strtotime($it['data_edicao']))) .
+                                                                     ' - Motivo: ' . esc($it['motivo_edicao'] ?? '-');
+                                                        }
                                                         ?>
                                                         <span class="badge bg-primary-subtle text-dark">Entrada: <?= esc($entrada) ?></span>
                                                         <span class="badge bg-secondary-subtle text-dark">Saída: <?= esc($saida) ?></span>
                                                         <span class="text-muted ms-2">Método: <?= esc($it['method'] ?? '-') ?></span>
+                                                        <?php if ($editTxt): ?>
+                                                          <div class="small text-muted"><?= $editTxt ?></div>
+                                                        <?php endif; ?>
                                                         <?php if (!empty($it['photo'])): ?>
                                                             <br>
                                                             <img src="/photos/<?= esc($it['photo']) ?>" alt="Foto" style="max-width:90px;max-height:90px;border-radius:5px;border:1px solid #ccc;">
@@ -300,7 +317,18 @@ function build_url_with(array $extra): string {
                                                     </div>
                                                 <?php endforeach; ?>
                                             <?php else: ?>
-                                                <span class="text-muted">Sem pontos</span>
+                                                <?php 
+                                                // Só marca FALTA se: tinha jornada, data já passou E após data de criação
+                                                $isFalta = ($info['expectedMin'] > 0) && ($date <= date('Y-m-d')) && ($date >= $teacherStartDate);
+                                                ?>
+                                                <?php if ($isFalta): ?>
+                                                    <span class="badge bg-danger text-white fs-6">
+                                                        <i class="bi bi-exclamation-triangle-fill"></i> FALTA
+                                                    </span>
+                                                    <div class="small text-danger mt-1">Jornada prevista não registrada</div>
+                                                <?php else: ?>
+                                                    <span class="text-muted">-</span>
+                                                <?php endif; ?>
                                             <?php endif; ?>
                                         </td>
                                         <td>
@@ -341,4 +369,5 @@ function build_url_with(array $extra): string {
         <?php endif; ?>
     </div>
 </body>
+
 </html>

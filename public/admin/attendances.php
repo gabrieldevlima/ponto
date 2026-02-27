@@ -57,7 +57,8 @@ $sql = "
     (DAYOFWEEK(a.date) - 1) AS weekday_idx,
     s.classes_count AS sch_classes_count,
     s.class_minutes AS sch_class_minutes,
-    mr.name AS manual_reason_name
+    mr.name AS manual_reason_name,
+    ed.username AS edited_by_username
   FROM attendance a
   JOIN teachers t ON a.teacher_id = t.id
   LEFT JOIN teacher_schedules s
@@ -65,6 +66,8 @@ $sql = "
    AND s.weekday = (DAYOFWEEK(a.date) - 1)
   LEFT JOIN manual_reasons mr
     ON mr.id = a.manual_reason_id
+  LEFT JOIN admins ed
+    ON ed.id = a.editado_por
 ";
 if ($where) $sql .= " WHERE " . implode(" AND ", $where);
 $sql .= " ORDER BY a.check_in DESC LIMIT {$limit}";
@@ -93,13 +96,78 @@ $fmtMin = function (int $min): string {
   return $sign . sprintf('%dh%02d', intdiv($min, 60), $min % 60);
 };
 
+/**
+ * Calcula minutos previstos para um professor em uma data específica.
+ * - Se usar sistema de períodos: soma a duração de cada período atribuído para o weekday.
+ * - Caso contrário: usa teacher_schedules (classes_count × class_minutes).
+ */
+function getExpectedMinutes(PDO $pdo, int $teacherId, string $date): int
+{
+  static $cache = [];
+  $cacheKey = $teacherId . '|' . $date;
+  if (isset($cache[$cacheKey])) return $cache[$cacheKey];
+
+  // weekday: 0=Dom ... 6=Sáb (compatível com schema)
+  $weekday = (int)date('w', strtotime($date));
+
+  $expected = 0;
+  if (teacher_uses_period_system($teacherId)) {
+    // Busca períodos atribuídos ao professor neste weekday e soma duração
+    $st = $pdo->prepare("
+      SELECT cp.start_time, cp.end_time
+      FROM teacher_class_assignments tca
+      JOIN class_periods cp ON cp.id = tca.period_id AND cp.active = 1
+      WHERE tca.teacher_id = ? AND tca.weekday = ?
+    ");
+    $st->execute([$teacherId, $weekday]);
+    while ($row = $st->fetch(PDO::FETCH_ASSOC)) {
+      $s = DateTime::createFromFormat('H:i:s', $row['start_time']) ?: DateTime::createFromFormat('H:i', $row['start_time']);
+      $e = DateTime::createFromFormat('H:i:s', $row['end_time'])   ?: DateTime::createFromFormat('H:i', $row['end_time']);
+      if ($s && $e) {
+        // Se fim <= início, considera跨-dia (raro, mas seguro)
+        if ($e <= $s) $e = (clone $e)->modify('+1 day');
+        $expected += max(0, (int)(($e->getTimestamp() - $s->getTimestamp()) / 60));
+      }
+    }
+  } else {
+    // Primeiro tenta rotina por aulas (teacher_schedules)
+    $st = $pdo->prepare("SELECT classes_count, class_minutes FROM teacher_schedules WHERE teacher_id = ? AND weekday = ?");
+    $st->execute([$teacherId, $weekday]);
+    if ($sc = $st->fetch(PDO::FETCH_ASSOC)) {
+      $expected = ((int)$sc['classes_count'] * (int)$sc['class_minutes']);
+    }
+    // Se não houver teacher_schedules, tenta rotina por horário (collaborator_time_schedules)
+    if ($expected <= 0) {
+      $st2 = $pdo->prepare("SELECT start_time, end_time, break_minutes FROM collaborator_time_schedules WHERE teacher_id = ? AND weekday = ?");
+      $st2->execute([$teacherId, $weekday]);
+      if ($ts = $st2->fetch(PDO::FETCH_ASSOC)) {
+        $start = $ts['start_time'] ?? null;
+        $end   = $ts['end_time'] ?? null;
+        $break = (int)($ts['break_minutes'] ?? 0);
+        if (!empty($start) && !empty($end)) {
+          $s = DateTime::createFromFormat('H:i:s', $start) ?: DateTime::createFromFormat('H:i', $start);
+          $e = DateTime::createFromFormat('H:i:s', $end)   ?: DateTime::createFromFormat('H:i', $end);
+          if ($s && $e) {
+            if ($e <= $s) $e = (clone $e)->modify('+1 day');
+            $expected = max(0, (int)(($e->getTimestamp() - $s->getTimestamp()) / 60) - $break);
+          }
+        }
+      }
+    }
+  }
+
+  $cache[$cacheKey] = (int)$expected;
+  return $cache[$cacheKey];
+}
+
 $resumo = [];
 $relatorio = [];
 foreach ($rows as $r) {
   $weekdayIdx = isset($r['weekday_idx']) ? (int)$r['weekday_idx'] : (int)date('w', strtotime($r['date']));
   $classes_count = (int)($r['sch_classes_count'] ?? 0);
   $class_minutes = (int)($r['sch_class_minutes'] ?? 0);
-  $total_esperado_min = $classes_count * $class_minutes;
+  // Calcula previsto de forma híbrida (períodos ou teacher_schedules)
+  $total_esperado_min = getExpectedMinutes($pdo, (int)$r['teacher_id'], (string)$r['date']);
 
   $total_realizado_min = 0;
   if (!empty($r['check_in']) && !empty($r['check_out'])) {
@@ -131,6 +199,7 @@ foreach ($rows as $r) {
   $r['saldo_min'] = $saldo_min;
   $r['location_in'] = $location_in;
   $r['location_out'] = $location_out;
+
   $relatorio[] = $r;
 }
 
@@ -144,7 +213,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     $html = ob_get_clean();
     $dompdf = new \Dompdf\Dompdf();
     $dompdf->loadHtml($html);
-    $dompdf->setPaper('A4', 'landscape'); // lista tende a ser mais larga
+    $dompdf->setPaper('A4', 'landscape');
     $dompdf->render();
     $dompdf->stream('registros_ponto_' . date('Ymd_His') . '.pdf');
     exit;
@@ -177,32 +246,7 @@ function build_url_with(array $extra): string
 </head>
 
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
-    <div class="container-fluid">
-      <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="dashboard.php">
-        <img src="../img/logo.png" alt="Logo da Empresa" style="height:auto;max-width:130px;">
-      </a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#adminNavbar"><span class="navbar-toggler-icon"></span></button>
-      <div class="collapse navbar-collapse" id="adminNavbar">
-        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-          <li class="nav-item"><a class="nav-link" href="dashboard.php"><i class="bi bi-house"></i> Início</a></li>
-          <li class="nav-item"><a class="nav-link active" href="attendances.php"><i class="bi bi-calendar-check"></i> Registros de Ponto</a></li>
-          <li class="nav-item"><a class="nav-link" href="teachers.php"><i class="bi bi-person-badge"></i> Colaboradores</a></li>
-          <li class="nav-item"><a class="nav-link" href="leaves.php"><i class="bi bi-person-x"></i> Afastamentos</a></li>
-          <?php if (is_network_admin($admin)): ?>
-            <li class="nav-item"><a class="nav-link" href="schools.php"><i class="bi bi-building"></i> Instituições</a></li>
-            <li class="nav-item"><a class="nav-link" href="admins.php"><i class="bi bi-people"></i> Administradores</a></li>
-          <?php endif; ?>
-          <li class="nav-item"><a class="nav-link" href="attendance_manual.php"><i class="bi bi-plus-circle"></i> Inserir Ponto Manual</a></li>
-        </ul>
-        <span class="navbar-text me-3 d-none d-lg-inline">
-          <i class="bi bi-person-circle"></i>
-          <?= esc($_SESSION['admin_name'] ?? 'Administrador') ?>
-        </span>
-        <a href="logout.php" class="btn btn-outline-light"><i class="bi bi-box-arrow-right"></i> Sair</a>
-      </div>
-    </div>
-  </nav>
+  <?php include __DIR__ . '/_navbar.php'; ?>
   <div class="container-fluid">
 
     <?php foreach ($messages as $msg): ?>
@@ -217,7 +261,7 @@ function build_url_with(array $extra): string
           </div>
           <div>
             <h3 class="mb-0">Registros de Ponto</h3>
-            <small class="text-muted"><?= number_format(count($relatorio)) ?> registros encontrados</small>
+            <small class="text-muted"><?= number_format(count($rows)) ?> registros encontrados</small>
           </div>
         </div>
         <div class="d-flex align-items-center gap-2">
@@ -283,6 +327,24 @@ function build_url_with(array $extra): string
       </div>
     </form>
 
+    <?php 
+    // Verifica se o professor selecionado usa sistema de grade horária
+    $teacherFilter = isset($_GET['teacher']) ? (int)$_GET['teacher'] : 0;
+    $selectedTeacherUsesPeriodSystem = false;
+    if ($teacherFilter > 0) {
+        $selectedTeacherUsesPeriodSystem = teacher_uses_period_system($teacherFilter);
+    }
+    ?>
+    
+    <?php if ($selectedTeacherUsesPeriodSystem): ?>
+    <div class="alert alert-info">
+        <i class="bi bi-info-circle me-2"></i>
+        <strong>Sistema de Grade Horária:</strong>
+        Este professor utiliza múltiplos check-ins por dia (um para cada aula/período). 
+        Cada registro representa uma aula específica. Períodos ociosos entre aulas não são contabilizados no pagamento.
+    </div>
+    <?php endif; ?>
+
     <div class="table-responsive">
       <table id="tbl-attendances" class="table table-bordered table-striped table-hover align-middle">
         <thead class="table-light">
@@ -293,7 +355,8 @@ function build_url_with(array $extra): string
             <th>Carga Horária</th>
             <th>Comprovantes</th>
             <th>Status</th>
-            <th>Método</th>
+            <th>Origem/Justificativa</th>
+            <th>Edição</th>
             <th>Ações</th>
           </tr>
         </thead>
@@ -321,67 +384,36 @@ function build_url_with(array $extra): string
             $horaIn = $fmtTime($r['check_in']);
             $horaOut = $fmtTime($r['check_out']);
 
-            // Método bruto do banco
+            // Método
             $methodRaw = $r['method'] ?? ($r['source'] ?? (isset($r['manual']) ? ($r['manual'] ? 'manual' : null) : null));
             $key = strtolower((string)$methodRaw);
-
-            // Normaliza para 3 modos: pin, foto, manual
             $mode = 'foto';
-            if ($key === 'pin') {
-              $mode = 'pin';
-            } elseif ($key === 'manual' || (!empty($r['manual']) && (int)$r['manual'] === 1)) {
-              $mode = 'manual';
-            } elseif (!empty($r['photo'])) {
-              $mode = 'foto';
-            }
+            if ($key === 'pin') $mode = 'pin';
+            elseif ($key === 'manual' || (!empty($r['manual']) && (int)$r['manual'] === 1)) $mode = 'manual';
+            elseif (!empty($r['photo'])) $mode = 'foto';
+            if (!empty($r['manual_reason_id'])) $mode = 'manual';
 
-            // Se tiver uma justificativa vinculada (FK), garante modo manual
-            $hasReason = !empty($r['manual_reason_id']);
-            if ($hasReason) $mode = 'manual';
-
-            // Labels/cores
-            $labels = [
-              'pin' => 'PIN',
-              'foto' => 'Foto',
-              'manual' => 'Manual',
-            ];
-            $icons = [
-              'pin' => 'bi-123',
-              'foto' => 'bi-camera',
-              'manual' => 'bi-pencil-square',
-            ];
-            $colors = [
-              'pin' => 'primary',
-              'foto' => 'success',
-              'manual' => 'secondary',
-            ];
-
+            $labels = ['pin' => 'PIN', 'foto' => 'Foto', 'manual' => 'Manual'];
+            $icons  = ['pin' => 'bi-123', 'foto' => 'bi-camera', 'manual' => 'bi-pencil-square'];
+            $colors = ['pin' => 'primary', 'foto' => 'success', 'manual' => 'secondary'];
             $label = $labels[$mode] ?? ucfirst($mode);
             $icon  = $icons[$mode] ?? 'bi-info-circle';
             $color = $colors[$mode] ?? 'secondary';
 
-            // Monta a justificativa:
-            // 1) Preferir nome via JOIN (mr.name) + texto livre (a.manual_reason_text), se houver
-            // 2) Fallback: JSON em a.info (info.items[].manual_reason_name/manual_reason_text)
-            // 3) Fallback: campos legados (manual_reason / justification etc.)
+            // Justificativa (mesma lógica existente)
             $justStr = '';
-
-            // 1) FK manual_reason_id -> manual_reasons.name
-            if ($hasReason) {
+            if (!empty($r['manual_reason_id'])) {
               $reasonName = trim((string)($r['manual_reason_name'] ?? ''));
-              $reasonText = trim((string)($r['manual_reason_text'] ?? '')); // existe em alguns schemas
+              $reasonText = trim((string)($r['manual_reason_text'] ?? ''));
               if ($reasonName !== '' || $reasonText !== '') {
                 $justStr = ($reasonName !== '' ? $reasonName : 'Manual') . ($reasonText !== '' ? ' - ' . $reasonText : '');
               }
             }
-
-            // 2) Fallback JSON em a.info
             if ($justStr === '') {
               $infoArr = [];
               $rawInfo = $r['info'] ?? '';
-              if (is_array($rawInfo)) {
-                $infoArr = $rawInfo;
-              } elseif (is_string($rawInfo) && $rawInfo !== '') {
+              if (is_array($rawInfo)) $infoArr = $rawInfo;
+              elseif (is_string($rawInfo) && $rawInfo !== '') {
                 $tmp = json_decode($rawInfo, true);
                 if (is_array($tmp)) {
                   if (count($tmp) === 1 && is_string(reset($tmp))) {
@@ -393,26 +425,18 @@ function build_url_with(array $extra): string
                 }
               }
               $items = [];
-              if (isset($infoArr['items']) && is_array($infoArr['items'])) {
-                $items = $infoArr['items'];
-              } elseif (is_array($infoArr) && isset($infoArr[0]) && is_array($infoArr[0])) {
-                $items = $infoArr;
-              }
+              if (isset($infoArr['items']) && is_array($infoArr['items'])) $items = $infoArr['items'];
+              elseif (is_array($infoArr) && isset($infoArr[0]) && is_array($infoArr[0])) $items = $infoArr;
               $parts = [];
               foreach (($items ?? []) as $it) {
                 if (!empty($it['manual_reason_id'])) {
-                  $txt = trim(
-                    ($it['manual_reason_name'] ?? 'Manual') .
-                      (!empty($it['manual_reason_text']) ? ' - ' . $it['manual_reason_text'] : '')
-                  );
+                  $txt = trim(($it['manual_reason_name'] ?? 'Manual') . (!empty($it['manual_reason_text']) ? ' - ' . $it['manual_reason_text'] : ''));
                   if ($txt !== '') $parts[] = $txt;
                 }
               }
               if ($parts) $justStr = implode(' | ', $parts);
               if ($justStr !== '') $mode = 'manual';
             }
-
-            // 3) Fallback legado
             if ($justStr === '' && $mode === 'manual') {
               $legacy = trim((string)(
                 $r['manual_reason'] ??
@@ -426,49 +450,40 @@ function build_url_with(array $extra): string
               ));
               if ($legacy !== '') $justStr = $legacy;
             }
+
+            // Edição
+            $wasEdited = !empty($r['data_edicao']);
+            $editedAt  = $wasEdited ? date('d/m/Y H:i', strtotime($r['data_edicao'])) : null;
+            $editedBy  = $r['edited_by_username'] ?? (!empty($r['editado_por']) ? ('#' . (int)$r['editado_por']) : null);
+            $editReason = $r['motivo_edicao'] ?? '';
+            $editType  = $r['tipo_edicao'] ?? '';
+            $editDelta = isset($r['edit_delta_min']) ? (int)$r['edit_delta_min'] : null;
           ?>
             <tr>
-              <!-- Colaborador -->
               <td class="text-start">
                 <div class="fw-semibold"><?= esc($r['name']) ?></div>
               </td>
-
-              <!-- Data -->
               <td class="text-nowrap">
                 <?= esc($fmtDateBR($r['date'])) ?>
                 <div class="text-muted small"><?= esc($r['weekday_label']) ?></div>
               </td>
-
-              <!-- Horário -->
               <td class="text-nowrap">
                 <div class="d-flex flex-column align-items-center gap-1">
                   <div class="d-inline-flex align-items-center gap-2">
                     <?php if ($horaIn): ?>
-                      <span class="badge rounded-pill text-bg-success" title="Entrada: <?= esc($r['check_in']) ?>">
-                        <i class="bi bi-box-arrow-in-right me-1"></i><?= esc($horaIn) ?>
-                      </span>
+                      <span class="badge rounded-pill text-bg-success" title="Entrada: <?= esc($r['check_in']) ?>"><i class="bi bi-box-arrow-in-right me-1"></i><?= esc($horaIn) ?></span>
                     <?php else: ?>
-                      <span class="badge rounded-pill text-bg-secondary" title="Entrada ausente">
-                        <i class="bi bi-box-arrow-in-right me-1"></i>—
-                      </span>
+                      <span class="badge rounded-pill text-bg-secondary" title="Entrada ausente"><i class="bi bi-box-arrow-in-right me-1"></i>—</span>
                     <?php endif; ?>
-
                     <span class="text-muted">–</span>
-
                     <?php if ($horaOut): ?>
-                      <span class="badge rounded-pill text-bg-danger" title="Saída: <?= esc($r['check_out']) ?>">
-                        <i class="bi bi-box-arrow-left me-1"></i><?= esc($horaOut) ?>
-                      </span>
+                      <span class="badge rounded-pill text-bg-danger" title="Saída: <?= esc($r['check_out']) ?>"><i class="bi bi-box-arrow-left me-1"></i><?= esc($horaOut) ?></span>
                     <?php else: ?>
-                      <span class="badge rounded-pill text-bg-secondary" title="Saída ausente">
-                        <i class="bi bi-box-arrow-left me-1"></i>—
-                      </span>
+                      <span class="badge rounded-pill text-bg-secondary" title="Saída ausente"><i class="bi bi-box-arrow-left me-1"></i>—</span>
                     <?php endif; ?>
                   </div>
                 </div>
               </td>
-
-              <!-- Carga (Trabalhado / Planejado) -->
               <td class="text-nowrap">
                 <div>Trabalhada: <?= $fmtMin($workedMin) ?></div>
                 <div class="text-muted small" title="Aulas: <?= (int)$classesCount ?> • Min/Aula: <?= (int)$classMinutes ?>">
@@ -492,73 +507,66 @@ function build_url_with(array $extra): string
                   </div>
                 <?php endif; ?>
               </td>
-
-              <!-- Comprovantes (ícones) -->
               <td class="text-nowrap">
-                <div class="d-inline-flex align-items-center gap-1">
-                  <?php if ($r['location_in']): ?>
-                    <a
-                      class="d-inline-flex align-items-center justify-content-center rounded-circle border border-success-subtle bg-success-subtle text-success me-1"
-                      style="width:2rem;height:2rem"
-                      href="https://maps.google.com/?q=<?= esc($r['location_in'][0]) ?>,<?= esc($r['location_in'][1]) ?>"
-                      target="_blank" rel="noopener"
-                      title="Entrada: <?= number_format($r['location_in'][0], 5, '.', '') ?>, <?= number_format($r['location_in'][1], 5, '.', '') ?>"
-                      aria-label="Entrada: <?= number_format($r['location_in'][0], 5, '.', '') ?>, <?= number_format($r['location_in'][1], 5, '.', '') ?>">
+                <?php
+                $hasIn = !empty($r['location_in']);
+                $hasOut = !empty($r['location_out']);
+                $hasPhoto = !empty($r['photo']);
+                ?>
+                <div class="d-flex align-items-center justify-content-center gap-2 flex-wrap">
+                  <?php if ($hasIn): ?>
+                    <a class="d-inline-flex align-items-center justify-content-center rounded-circle border border-success-subtle bg-success-subtle text-success" style="width:2rem;height:2rem"
+                      href="https://maps.google.com/?q=<?= esc($r['location_in'][0]) ?>,<?= esc($r['location_in'][1]) ?>" target="_blank" rel="noopener"
+                      title="Entrada: <?= number_format($r['location_in'][0], 5, '.', '') ?>, <?= number_format($r['location_in'][1], 5, '.', '') ?>">
                       <i class="bi bi-geo-alt-fill"></i>
                     </a>
                   <?php endif; ?>
-
-                  <?php if ($r['location_out']): ?>
-                    <a
-                      class="d-inline-flex align-items-center justify-content-center rounded-circle border border-danger-subtle bg-danger-subtle text-danger me-1"
-                      style="width:2rem;height:2rem"
-                      href="https://maps.google.com/?q=<?= esc($r['location_out'][0]) ?>,<?= esc($r['location_out'][1]) ?>"
-                      target="_blank" rel="noopener"
-                      title="Saída: <?= number_format($r['location_out'][0], 5, '.', '') ?>, <?= number_format($r['location_out'][1], 5, '.', '') ?>"
-                      aria-label="Saída: <?= number_format($r['location_out'][0], 5, '.', '') ?>, <?= number_format($r['location_out'][1], 5, '.', '') ?>">
+                  <?php if ($hasOut): ?>
+                    <a class="d-inline-flex align-items-center justify-content-center rounded-circle border border-danger-subtle bg-danger-subtle text-danger" style="width:2rem;height:2rem"
+                      href="https://maps.google.com/?q=<?= esc($r['location_out'][0]) ?>,<?= esc($r['location_out'][1]) ?>" target="_blank" rel="noopener"
+                      title="Saída: <?= number_format($r['location_out'][0], 5, '.', '') ?>, <?= number_format($r['location_out'][1], 5, '.', '') ?>">
                       <i class="bi bi-geo-alt"></i>
                     </a>
                   <?php endif; ?>
-
-                  <?php if (!empty($r['photo'])): ?>
-                    <a
-                      class="d-inline-flex align-items-center justify-content-center rounded-circle border border-primary-subtle bg-primary-subtle text-primary"
-                      style="width:2rem;height:2rem"
-                      href="../photos/<?= esc($r['photo']) ?>" target="_blank" rel="noopener"
-                      title="Ver foto" aria-label="Ver foto">
-                      <i class="bi bi-image"></i>
-                    </a>
+                  <?php if ($hasPhoto): ?>
+                    <?php if (empty($r['photo_deleted']) || $r['photo_deleted'] == 0): ?>
+                      <a class="d-inline-block" href="../photos/<?= esc($r['photo']) ?>" target="_blank" rel="noopener" title="Ver foto" aria-label="Ver foto">
+                        <img src="../photos/<?= esc($r['photo']) ?>" alt="Foto do registro" loading="lazy" class="border border-primary-subtle rounded" style="width:2rem;height:2rem;object-fit:cover;">
+                      </a>
+                    <?php else: ?>
+                      <span class="badge bg-secondary" title="Foto excluída automaticamente em <?= isset($r['photo_deleted_at']) ? date('d/m/Y', strtotime($r['photo_deleted_at'])) : 'data desconhecida' ?>">
+                        <i class="bi bi-image-fill"></i> Foto deletada
+                      </span>
+                    <?php endif; ?>
                   <?php endif; ?>
-
-                  <?php if (!$r['location_in'] && !$r['location_out'] && empty($r['photo'])): ?>
+                  <?php if (!$hasIn && !$hasOut && !$hasPhoto): ?>
                     <span class="text-muted">—</span>
                   <?php endif; ?>
                 </div>
               </td>
-
-              <!-- Status -->
               <td class="text-nowrap">
                 <?php if ($approved === null): ?>
-                  <span class="badge rounded-pill border border-warning text-warning-emphasis bg-warning-subtle px-3 py-2" title="Aguardando análise">
-                    <i class="bi bi-hourglass-split me-1"></i>Pendente
-                  </span>
+                  <span class="badge rounded-pill border border-warning text-warning-emphasis bg-warning-subtle px-3 py-2" title="Aguardando análise"><i class="bi bi-hourglass-split me-1"></i>Pendente</span>
+                  <?php if (!empty($r['pending_reasons'])): ?>
+                    <?php 
+                    $reasons = json_decode($r['pending_reasons'], true);
+                    if (is_array($reasons) && count($reasons) > 0):
+                    ?>
+                    <div class="small text-muted mt-1">
+                      <i class="bi bi-exclamation-circle me-1"></i><?= htmlspecialchars(implode(', ', $reasons)) ?>
+                    </div>
+                    <?php endif; ?>
+                  <?php endif; ?>
                 <?php elseif ((int)$approved === 1): ?>
-                  <span class="badge rounded-pill border border-success text-success-emphasis bg-success-subtle px-3 py-2" title="Registro aprovado">
-                    <i class="bi bi-check-circle-fill me-1"></i>Aprovado
-                  </span>
+                  <span class="badge rounded-pill border border-success text-success-emphasis bg-success-subtle px-3 py-2" title="Registro aprovado"><i class="bi bi-check-circle-fill me-1"></i>Aprovado</span>
                 <?php else: ?>
-                  <span class="badge rounded-pill border border-danger text-danger-emphasis bg-danger-subtle px-3 py-2" title="Registro rejeitado">
-                    <i class="bi bi-x-circle-fill me-1"></i>Rejeitado
-                  </span>
+                  <span class="badge rounded-pill border border-danger text-danger-emphasis bg-danger-subtle px-3 py-2" title="Registro rejeitado"><i class="bi bi-x-circle-fill me-1"></i>Rejeitado</span>
                 <?php endif; ?>
               </td>
-
-              <!-- Origem + Justificativa (na mesma coluna) -->
               <td class="text-center">
                 <span class="badge rounded-pill border border-<?= esc($color) ?> text-<?= esc($color) ?>-emphasis bg-<?= esc($color) ?>-subtle px-3 py-2" title="<?= esc($label) ?>">
                   <i class="bi <?= esc($icon) ?> me-1"></i><?= esc($label) ?>
                 </span>
-
                 <?php if ($mode === 'manual'): ?>
                   <div class="small text-muted mt-1" style="max-width:420px; white-space:normal;">
                     <i class="bi bi-chat-left-text me-1"></i>
@@ -566,18 +574,32 @@ function build_url_with(array $extra): string
                   </div>
                 <?php endif; ?>
               </td>
-
-              <!-- Ações -->
+              <td class="text-start">
+                <?php if ($wasEdited): ?>
+                  <div class="small">
+                    <span class="badge text-bg-info-subtle text-dark" title="Editado"><i class="bi bi-pencil-square me-1"></i>Editado</span>
+                  </div>
+                  <div class="small text-muted mt-1">
+                    <?php if ($editType): ?><div><strong>Tipo:</strong> <?= esc($editType) ?><?= $editDelta !== null ? ' • Δ ' . (int)$editDelta . ' min' : '' ?></div><?php endif; ?>
+                    <div><strong>Por:</strong> <?= esc($editedBy ?? '-') ?></div>
+                    <div><strong>Em:</strong> <?= esc($editedAt ?? '-') ?></div>
+                    <div><strong>Motivo:</strong> <?= esc($editReason ?: '-') ?></div>
+                  </div>
+                <?php else: ?>
+                  <span class="text-muted">—</span>
+                <?php endif; ?>
+              </td>
               <td>
                 <div class="d-flex flex-wrap gap-2 justify-content-center">
+                  <a href="attendance_edit.php?id=<?= (int)$r['id'] ?>" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-pencil-square"></i> Editar
+                  </a>
                   <?php if ($approved === null || (int)$approved === 0): ?>
                     <form method="post" action="attendances_action.php" onsubmit="return confirm('Aprovar este registro de ponto?')">
                       <input type="hidden" name="csrf" value="<?= esc(csrf_token()) ?>">
                       <input type="hidden" name="attendance_id" value="<?= (int)$r['id'] ?>">
                       <input type="hidden" name="act" value="approve">
-                      <button type="submit" class="btn btn-sm btn-outline-success">
-                        <i class="bi bi-check-circle"></i> Aprovar
-                      </button>
+                      <button type="submit" class="btn btn-sm btn-outline-success"><i class="bi bi-check-circle"></i> Aprovar</button>
                     </form>
                   <?php endif; ?>
                   <?php if ($approved === null || (int)$approved === 1): ?>
@@ -585,9 +607,7 @@ function build_url_with(array $extra): string
                       <input type="hidden" name="csrf" value="<?= esc(csrf_token()) ?>">
                       <input type="hidden" name="attendance_id" value="<?= (int)$r['id'] ?>">
                       <input type="hidden" name="act" value="reject">
-                      <button type="submit" class="btn btn-sm btn-outline-danger">
-                        <i class="bi bi-x-circle"></i> Rejeitar
-                      </button>
+                      <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-x-circle"></i> Rejeitar</button>
                     </form>
                   <?php endif; ?>
                 </div>
@@ -650,5 +670,7 @@ function build_url_with(array $extra): string
     </div>
   </div>
 </body>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 </html>

@@ -1,10 +1,6 @@
 -- SQL Schema (MySQL 5.7+/8.0+ or MariaDB 10.3+) for the Attendance/HR system
 -- Character set/collation: utf8mb4 recommended
 
--- Optional: choose your database
--- CREATE DATABASE IF NOT EXISTS your_database_name CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
--- USE your_database_name;
-
 SET NAMES utf8mb4;
 SET time_zone = '+00:00';
 
@@ -18,6 +14,8 @@ CREATE TABLE IF NOT EXISTS schools (
   name VARCHAR(150) NOT NULL,
   code VARCHAR(50) NOT NULL UNIQUE,
   active TINYINT(1) NOT NULL DEFAULT 1,
+  lat DOUBLE NULL, -- latitude da escola (opcional)
+  lng DOUBLE NULL, -- longitude da escola (opcional)
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -199,7 +197,7 @@ CREATE TABLE IF NOT EXISTS hour_bank_entries (
   date DATE NOT NULL,
   minutes INT NOT NULL, -- +credit, -debit
   reason VARCHAR(150) NULL,
-  source ENUM('auto','manual') NOT NULL DEFAULT 'manual',
+  source ENUM('auto','manual','overtime_approved') NOT NULL DEFAULT 'manual',
   ref_attendance_id INT NULL,
   created_by_admin_id INT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -211,6 +209,34 @@ CREATE TABLE IF NOT EXISTS hour_bank_entries (
 
 CREATE INDEX idx_hour_bank_teacher_date ON hour_bank_entries(teacher_id, date);
 CREATE INDEX idx_hour_bank_source ON hour_bank_entries(source);
+
+-- Overtime requests (horas extras)
+CREATE TABLE IF NOT EXISTS overtime_requests (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  attendance_id INT NOT NULL,
+  teacher_id INT NOT NULL,
+  school_id INT NULL,
+  date DATE NOT NULL,
+  minutes INT NOT NULL,                    -- minutos de hora extra detectados
+  expected_minutes INT NOT NULL DEFAULT 0, -- minutos esperados no dia
+  worked_minutes INT NOT NULL DEFAULT 0,   -- minutos efetivamente trabalhados
+  status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  approved_by_admin_id INT NULL,
+  approved_at DATETIME NULL,
+  rejection_reason VARCHAR(255) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_ot_attendance FOREIGN KEY (attendance_id) REFERENCES attendance(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ot_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id),
+  CONSTRAINT fk_ot_school FOREIGN KEY (school_id) REFERENCES schools(id),
+  CONSTRAINT fk_ot_admin FOREIGN KEY (approved_by_admin_id) REFERENCES admins(id),
+  UNIQUE KEY uq_attendance_overtime (attendance_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_overtime_teacher_date ON overtime_requests(teacher_id, date);
+CREATE INDEX idx_overtime_status ON overtime_requests(status);
+CREATE INDEX idx_overtime_attendance ON overtime_requests(attendance_id);
+CREATE INDEX idx_overtime_date ON overtime_requests(date);
 
 -- Audit logs
 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -271,7 +297,8 @@ INSERT IGNORE INTO manual_reasons (id, name, active, sort_order) VALUES
 
 -- Default app settings (idempotent)
 INSERT IGNORE INTO app_settings (k, v) VALUES
-  ('tolerance_minutes', '5');
+  ('tolerance_minutes', '5'),
+  ('geofence_radius_m', '300');
 
 -- Common leave types (optional baseline; idempotent)
 INSERT IGNORE INTO leave_types (id, name, code, paid, affects_bank, active) VALUES

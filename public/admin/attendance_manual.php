@@ -174,10 +174,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if (!$errors) {
           $pdo->beginTransaction();
+          $stNsr = $pdo->query("SELECT COALESCE(MAX(nsr), 0) + 1 FROM attendance FOR UPDATE");
+          $nextNsr = (int)$stNsr->fetchColumn();
           $stmt = $pdo->prepare("INSERT INTO attendance
-            (teacher_id, date, check_in, method, approved, manual_reason_id, manual_reason_text, manual_by_admin_id, manual_created_at)
-            VALUES (?, ?, ?, 'manual', ?, ?, ?, ?, NOW())");
-          $stmt->execute([$teacher_id, $date, $check_in, $approved, $reason_id, $reason_text, $adminId]);
+            (teacher_id, date, check_in, method, approved, manual_reason_id, manual_reason_text, editado_por, data_edicao, nsr)
+            VALUES (?, ?, ?, 'manual', ?, ?, ?, ?, NOW(), ?)");
+          $stmt->execute([$teacher_id, $date, $check_in, $approved, $reason_id, $reason_text, $adminId, $nextNsr]);
           $idInserted = (int)$pdo->lastInsertId();
           $pdo->commit();
           audit_log('create', 'attendance', $idInserted, ['type' => 'in', 'date' => $date, 'time' => $time_in, 'manual_reason_id' => $reason_id]);
@@ -201,7 +203,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Saída deve ser após a entrada aberta.';
           } else {
             $stmt = $pdo->prepare("UPDATE attendance
-              SET check_out = ?, method = 'manual', approved = ?, manual_reason_id = ?, manual_reason_text = ?, manual_by_admin_id = ?, manual_created_at = NOW()
+              SET check_out = ?, method = 'manual', approved = ?, manual_reason_id = ?, manual_reason_text = ?, editado_por = ?, data_edicao = NOW()
               WHERE id = ?");
             $stmt->execute([$check_out, $approved, $reason_id, $reason_text, $adminId, (int)$open['id']]);
             $pdo->commit();
@@ -221,10 +223,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if (!$errors) {
           $pdo->beginTransaction();
+          $stNsr = $pdo->query("SELECT COALESCE(MAX(nsr), 0) + 1 FROM attendance FOR UPDATE");
+          $nextNsr = (int)$stNsr->fetchColumn();
           $stmt = $pdo->prepare("INSERT INTO attendance
-            (teacher_id, date, check_in, check_out, method, approved, manual_reason_id, manual_reason_text, manual_by_admin_id, manual_created_at)
-            VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?, NOW())");
-          $stmt->execute([$teacher_id, $date, $check_in, $check_out, $approved, $reason_id, $reason_text, $adminId]);
+            (teacher_id, date, check_in, check_out, method, approved, manual_reason_id, manual_reason_text, editado_por, data_edicao, nsr)
+            VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?, NOW(), ?)");
+          $stmt->execute([$teacher_id, $date, $check_in, $check_out, $approved, $reason_id, $reason_text, $adminId, $nextNsr]);
           $insId = (int)$pdo->lastInsertId();
           $pdo->commit();
           audit_log('create', 'attendance', $insId, ['type' => 'both', 'date' => $date, 'time_in' => $time_in, 'time_out' => $time_out, 'manual_reason_id' => $reason_id]);
@@ -234,7 +238,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       }
     } catch (Throwable $e) {
       if ($pdo->inTransaction()) $pdo->rollBack();
-      $errors[] = 'Erro ao salvar. Tente novamente.';
+      error_log("Erro ao salvar ponto manual: " . $e->getMessage());
+      $errors[] = 'Erro ao salvar: ' . $e->getMessage();
     }
   }
 }
@@ -254,29 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
-    <div class="container-fluid">
-      <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="dashboard.php">
-        <img src="../img/logo.png" alt="Logo da Empresa" style="height:auto;max-width:130px;">
-      </a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#adminNavbar"><span class="navbar-toggler-icon"></span></button>
-      <div class="collapse navbar-collapse" id="adminNavbar">
-        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-          <li class="nav-item"><a class="nav-link" href="dashboard.php"><i class="bi bi-house"></i> Início</a></li>
-          <li class="nav-item"><a class="nav-link" href="attendances.php"><i class="bi bi-calendar-check"></i> Registros de Ponto</a></li>
-          <li class="nav-item"><a class="nav-link" href="teachers.php"><i class="bi bi-person-badge"></i> Colaboradores</a></li>
-          <li class="nav-item"><a class="nav-link" href="leaves.php"><i class="bi bi-person-x"></i> Afastamentos</a></li>
-          <?php if (is_network_admin($adm)): ?>
-            <li class="nav-item"><a class="nav-link" href="schools.php"><i class="bi bi-building"></i> Instituições</a></li>
-            <li class="nav-item"><a class="nav-link" href="admins.php"><i class="bi bi-people"></i> Administradores</a></li>
-          <?php endif; ?>
-          <li class="nav-item"><a class="nav-link active" href="attendance_manual.php"><i class="bi bi-plus-circle"></i> Inserir Ponto Manual</a></li>
-        </ul>
-        <span class="navbar-text me-3 d-none d-lg-inline"><i class="bi bi-person-circle"></i> <?= esc($_SESSION['admin_name'] ?? 'Administrador') ?></span>
-        <a href="logout.php" class="btn btn-outline-light"><i class="bi bi-box-arrow-right"></i> Sair</a>
-      </div>
-    </div>
-  </nav>
+  <?php include __DIR__ . '/_navbar.php'; ?>
   <div class="container-fluid mb-5">
     <div class="card rounded-3 border bg-body mb-4">
       <div class="card-body py-3 d-flex align-items-center justify-content-between">
@@ -442,5 +425,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     toggleReasonText();
   </script>
 </body>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 </html>

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste de Performance - Frontend</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .resultado {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .rapido { color: green; font-weight: bold; }
+        .medio { color: orange; font-weight: bold; }
+        .lento { color: red; font-weight: bold; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .log {
+            background: #f8f9fa;
+            padding: 10px;
+            border-left: 3px solid #007bff;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .erro {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+            color: #721c24;
+        }
+        pre {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Diagnóstico de Performance - Frontend</h1>
+    
+    <div class="resultado">
+        <h2>Testes Disponíveis</h2>
+        <button onclick="testarBackend()">1. Testar Backend PHP</button>
+        <button onclick="testarUploadFoto()">2. Testar Upload de Foto</button>
+        <button onclick="testarCompleto()">3. Teste Completo (Simular Registro)</button>
+        <button onclick="limparResultados()">Limpar</button>
+    </div>
+
+    <div id="resultados"></div>
+
+    <script>
+        const appBase = '../'; // Ajuste conforme necessário
+        const apiTest = appBase + 'api/test_performance.php';
+        const apiCheckin = appBase + 'api/checkin.php';
+
+        function log(msg, tipo = 'info') {
+            const div = document.createElement('div');
+            div.className = 'log' + (tipo === 'erro' ? ' erro' : '');
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            document.getElementById('resultados').appendChild(div);
+        }
+
+        function classificarTempo(ms) {
+            if (ms < 100) return '<span class="rapido">Rápido (' + ms + 'ms)</span>';
+            if (ms < 500) return '<span class="medio">Médio (' + ms + 'ms)</span>';
+            return '<span class="lento">LENTO (' + ms + 'ms)</span>';
+        }
+
+        async function testarBackend() {
+            log('Testando backend PHP...');
+            const inicio = performance.now();
+            
+            try {
+                const response = await fetch(apiTest);
+                const tempo = performance.now() - inicio;
+                const data = await response.json();
+                
+                const div = document.createElement('div');
+                div.className = 'resultado';
+                div.innerHTML = `
+                    <h3>✅ Resultado do Backend</h3>
+                    <p><strong>Tempo total:</strong> ${classificarTempo(tempo.toFixed(2))}</p>
+                    <p><strong>Código PHP atualizado:</strong> ${data.diagnostico.codigo_php_atualizado === 'SIM' ? '✅ SIM' : '❌ NÃO'}</p>
+                    <p><strong>Banco conectado:</strong> ${data.diagnostico.banco_conectado ? '✅ SIM' : '❌ NÃO'}</p>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+                document.getElementById('resultados').appendChild(div);
+                
+                if (data.diagnostico.codigo_php_atualizado === 'NAO') {
+                    log('⚠️ ATENÇÃO: Código PHP NÃO está atualizado!', 'erro');
+                }
+            } catch (error) {
+                log('❌ Erro ao testar backend: ' + error.message, 'erro');
+            }
+        }
+
+        async function testarUploadFoto() {
+            log('Criando foto de teste (1MB)...');
+            
+            // Criar uma foto de teste (canvas)
+            const canvas = document.createElement('canvas');
+            canvas.width = 1200;
+            canvas.height = 1200;
+            const ctx = canvas.getContext('2d');
+            
+            // Desenhar algo
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#fff';
+            ctx.font = '48px Arial';
+            ctx.fillText('TESTE DE FOTO', 100, 600);
+            
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            const tamanhoKB = Math.round((dataUrl.length * 3/4) / 1024);
+            
+            log(`Foto criada: ${tamanhoKB}KB`);
+            log('Medindo tempo de processamento...');
+            
+            const inicio = performance.now();
+            
+            // Simular o que o sistema faz com a foto
+            const base64Data = dataUrl.split(',')[1];
+            const decoded = atob(base64Data);
+            
+            const tempo = performance.now() - inicio;
+            
+            const div = document.createElement('div');
+            div.className = 'resultado';
+            div.innerHTML = `
+                <h3>📷 Resultado do Teste de Foto</h3>
+                <p><strong>Tamanho da foto:</strong> ${tamanhoKB}KB</p>
+                <p><strong>Tempo de processamento:</strong> ${classificarTempo(tempo.toFixed(2))}</p>
+                <p><strong>Tamanho decodificado:</strong> ${Math.round(decoded.length / 1024)}KB</p>
+                ${tempo > 500 ? '<p class="lento">⚠️ Foto pode estar muito grande!</p>' : ''}
+            `;
+            document.getElementById('resultados').appendChild(div);
+        }
+
+        async function testarCompleto() {
+            log('Iniciando teste completo (simulação de registro)...');
+            const inicio = performance.now();
+            
+            const etapas = [];
+            
+            // Etapa 1: Criar foto
+            const t1 = performance.now();
+            const canvas = document.createElement('canvas');
+            canvas.width = 800;
+            canvas.height = 600;
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+            etapas.push({ nome: 'Criar foto', tempo: performance.now() - t1 });
+            
+            // Etapa 2: Obter geolocalização (simulado)
+            const t2 = performance.now();
+            await new Promise(resolve => setTimeout(resolve, 100)); // Simular delay do GPS
+            etapas.push({ nome: 'Obter GPS (simulado)', tempo: performance.now() - t2 });
+            
+            // Etapa 3: Testar backend
+            const t3 = performance.now();
+            try {
+                await fetch(apiTest);
+                etapas.push({ nome: 'Backend PHP', tempo: performance.now() - t3 });
+            } catch (error) {
+                etapas.push({ nome: 'Backend PHP', tempo: performance.now() - t3, erro: error.message });
+            }
+            
+            const tempoTotal = performance.now() - inicio;
+            
+            const div = document.createElement('div');
+            div.className = 'resultado';
+            let html = `<h3>🎯 Teste Completo</h3>`;
+            html += `<p><strong>Tempo total:</strong> ${classificarTempo(tempoTotal.toFixed(2))}</p>`;
+            html += `<h4>Etapas:</h4><ul>`;
+            
+            etapas.forEach(etapa => {
+                const cls = etapa.tempo < 100 ? 'rapido' : etapa.tempo < 500 ? 'medio' : 'lento';
+                html += `<li><span class="${cls}">${etapa.nome}: ${etapa.tempo.toFixed(2)}ms</span>`;
+                if (etapa.erro) html += ` <span class="erro">(ERRO: ${etapa.erro})</span>`;
+                html += `</li>`;
+            });
+            
+            html += `</ul>`;
+            
+            if (tempoTotal > 2000) {
+                html += `<p class="lento">⚠️ ATENÇÃO: Teste demorou mais de 2 segundos! Problema identificado.</p>`;
+            }
+            
+            div.innerHTML = html;
+            document.getElementById('resultados').appendChild(div);
+        }
+
+        function limparResultados() {
+            document.getElementById('resultados').innerHTML = '';
+        }
+
+        // Log inicial
+        log('Sistema de diagnóstico carregado. Clique nos botões acima para testar.');
+    </script>
+</body>
+</html>
+

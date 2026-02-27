@@ -66,6 +66,17 @@ try {
   $upd = $pdo->prepare("UPDATE attendance SET approved = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
   $upd->execute([$newApproved, $attendanceId]);
 
+  // Se rejeitando, auto-rejeita solicitações de hora extra pendentes
+  if ($act === 'reject') {
+    $rejected = auto_reject_overtime_on_attendance_rejection($pdo, $attendanceId, (int)$admin['id']);
+    if ($rejected > 0) {
+      audit_log('info', 'overtime_request', null, [
+        'message' => "Auto-rejeitado $rejected solicitações de hora extra devido à rejeição do ponto",
+        'attendance_id' => $attendanceId
+      ]);
+    }
+  }
+
   // Auditoria
   audit_log('update', 'attendance', $attendanceId, [
     'approved' => $newApproved,

@@ -1,0 +1,10 @@
+# Bloqueia acesso direto aos anexos de afastamentos
+# Os arquivos devem ser acessados apenas através do sistema
+Order Deny,Allow
+Deny from all
+
+# Permite apenas acesso via script PHP
+<FilesMatch "\.(jpg|jpeg|png|pdf|doc|docx)$">
+  Deny from all
+</FilesMatch>
+

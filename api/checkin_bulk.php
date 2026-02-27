@@ -62,26 +62,46 @@ function process_check_item(PDO $pdo, array $item, DateTimeZone $tzBR): array {
   $lng = isset($geo['lng']) ? (float)$geo['lng'] : null;
   $acc = isset($geo['acc']) ? (float)$geo['acc'] : null;
 
-  // Já tem ponto aberto?
-  $stmt = $pdo->prepare("SELECT * FROM attendance WHERE teacher_id = ? AND date = ? AND check_in IS NOT NULL AND check_out IS NULL ORDER BY id DESC LIMIT 1");
-  $stmt->execute([$teacherId, $today]);
-  $open = $stmt->fetch(PDO::FETCH_ASSOC);
-  $action = $open ? 'saída' : 'entrada';
+  // Portaria 671/2021 - Campos obrigatórios
+  $recordMode = isset($item['recordMode']) ? $item['recordMode'] : 'offline'; // bulk geralmente é offline
+  $recordedAt = isset($item['recordedAt']) ? $item['recordedAt'] : $now;
+  $syncedAt = $now; // Sincronização acontece agora no bulk
+  $hlbSyncStatus = 'synced';
+  $hlbOffsetSeconds = isset($item['hlbOffsetSeconds']) ? (int)$item['hlbOffsetSeconds'] : 0;
+  $deviceIdentifier = substr(hash('sha256', $ua . $ip), 0, 32);
 
   // Modo do colaborador
   $stMode = $pdo->prepare("SELECT ct.schedule_mode FROM teachers t LEFT JOIN collaborator_types ct ON ct.id=t.type_id WHERE t.id=?");
   $stMode->execute([$teacherId]);
   $mode = $stMode->fetchColumn() ?: 'classes';
 
+  $weekday = (int)(new DateTimeImmutable('now', $tzBR))->format('w');
+  $currentTime = (new DateTimeImmutable('now', $tzBR))->format('H:i:s');
+
+  // Verifica se há ponto aberto hoje (check-in único por dia)
+  $stmt = $pdo->prepare("SELECT * FROM attendance WHERE teacher_id = ? AND date = ? AND check_in IS NOT NULL AND check_out IS NULL ORDER BY id DESC LIMIT 1");
+  $stmt->execute([$teacherId, $today]);
+  $open = $stmt->fetch(PDO::FETCH_ASSOC);
+  $action = $open ? 'saída' : 'entrada';
+
+  // Verifica se professor usa sistema de grade horária (para pagamento fixo)
+  $usesPeriodSystem = teacher_uses_period_system($teacherId);
+  
+  // Variável para marcar candidato a hora extra
+  $isOvertimeCandidate = 0;
+  $overtimeJustification = null;
+
   // Validação por modo (apenas para entrada)
   if ($action === 'entrada') {
-    $weekday = (int)(new DateTimeImmutable('now', $tzBR))->format('w');
     if ($mode === 'classes') {
       $stmt = $pdo->prepare("SELECT classes_count FROM teacher_schedules WHERE teacher_id = ? AND weekday = ?");
       $stmt->execute([$teacherId, $weekday]);
       $schedule = $stmt->fetch(PDO::FETCH_ASSOC);
       if (!$schedule || (int)$schedule['classes_count'] <= 0) {
-        return ['status'=>'error','message'=>'Não há rotina prevista para você neste dia.'];
+        // Sem aulas regulares hoje - pode ser dia especial/evento
+        // Permite check-in mas marca como overtime candidate
+        $isOvertimeCandidate = 1;
+        $overtimeJustification = isset($item['overtime_justification']) ? trim($item['overtime_justification']) : null;
       }
     } elseif ($mode === 'time') {
       $stmt = $pdo->prepare("SELECT start_time, end_time FROM collaborator_time_schedules WHERE teacher_id = ? AND weekday = ?");
@@ -95,25 +115,111 @@ function process_check_item(PDO $pdo, array $item, DateTimeZone $tzBR): array {
     }
   }
 
-  // Salva foto (diretório público é /public/photos)
+  // Geofence
+  $radiusM = (float)((get_setting('geofence_radius_m', '300') ?? '300'));
+  $maxAccM = 100.0;
+  $geoOk = false;
+  $matchedSchoolId = null;
+
+  if ($lat !== null && $lng !== null) {
+    if ($acc !== null && $acc > $maxAccM) {
+      // precisão ruim -> deixa pendente
+      $geoOk = false;
+    }
+    $schools = get_teacher_allowed_schools($pdo, $teacherId);
+    if ($schools) {
+      [$inRadius, $sid] = match_school_by_geo($schools, $lat, $lng, $radiusM);
+      $geoOk = ($inRadius === true) && !($acc !== null && $acc > $maxAccM);
+      $matchedSchoolId = $sid;
+    } else {
+      $geoOk = false;
+    }
+  }
+
   $dir = __DIR__ . '/../public/photos/';
   if (!is_dir($dir)) mkdir($dir, 0777, true);
   $filename = 'foto_' . $teacherId . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(3)) . '.jpg';
   if (preg_match('#^data:image/[^;]+;base64,(.+)$#', (string)$photo, $m)) {
       file_put_contents($dir . $filename, base64_decode($m[1]));
+      
+      // Auto cleanup de fotos antigas se habilitado
+      if (defined('PHOTO_CLEANUP_ENABLED') && PHOTO_CLEANUP_ENABLED) {
+          try {
+              $cleanupStats = cleanup_old_photos($pdo);
+              if ($cleanupStats['status'] === 'completed') {
+                  error_log(sprintf(
+                      "Photo cleanup (bulk): %d fotos deletadas, %.2f MB liberados",
+                      $cleanupStats['deleted_count'],
+                      $cleanupStats['freed_space_mb']
+                  ));
+              }
+          } catch (Throwable $e) {
+              error_log("Photo cleanup error (bulk): " . $e->getMessage());
+          }
+      }
   } else {
       return ['status'=>'error','message'=>'Foto inválida.'];
   }
 
+  $hasPhoto = (bool)$filename;
+  $hasGeo = ($lat !== null && $lng !== null);
+  // Candidatos a hora extra SEMPRE ficam pendentes para aprovação do admin
+  $approvedNow = ($hasPhoto && $hasGeo && $geoOk && !$isOvertimeCandidate) ? 1 : null;
+
   if ($action === 'entrada') {
-    $stmt = $pdo->prepare("INSERT INTO attendance
-      (teacher_id, date, check_in, method, ip, user_agent, check_in_lat, check_in_lng, check_in_acc, photo)
-      VALUES (?,?,?,?,?,?,?,?,?,?)");
-    $stmt->execute([$teacherId, $today, $now, 'pin', $ip, $ua, $lat, $lng, $acc, $filename]);
-    audit_log('create','attendance',$pdo->lastInsertId(),['teacher_id'=>$teacherId,'type'=>'checkin','bulk'=>true]);
-    return ['status'=>'ok','action'=>'entrada','time'=>$now,'photo'=>'/public/photos/'.$filename,'teacher'=>['id'=>$teacherId,'name'=>$prof['name']]];
+    // OTIMIZAÇÃO: Gerar NSR no código PHP (muito mais rápido que trigger)
+    // Usa transação para garantir que não haja duplicatas
+    $pdo->beginTransaction();
+    try {
+      // Busca próximo NSR com lock para evitar race condition
+      $stmtNsrNext = $pdo->query("SELECT COALESCE(MAX(nsr), 0) + 1 as next_nsr FROM attendance FOR UPDATE");
+      $nextNsr = (int)$stmtNsrNext->fetchColumn();
+      
+      $stmt = $pdo->prepare("INSERT INTO attendance
+        (teacher_id, school_id, date, check_in, method, ip, user_agent, check_in_lat, check_in_lng, check_in_acc, photo, approved,
+         record_mode, recorded_at, synced_at, hlb_sync_status, hlb_offset_seconds, device_identifier,
+         is_overtime_candidate, overtime_justification, nsr)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+      $stmt->execute([
+        $teacherId, $matchedSchoolId, $today, $now, 'pin', $ip, $ua, $lat, $lng, $acc, $filename, $approvedNow,
+        $recordMode, $recordedAt, $syncedAt, $hlbSyncStatus, $hlbOffsetSeconds, $deviceIdentifier,
+        $isOvertimeCandidate, $overtimeJustification, $nextNsr
+      ]);
+      $attendanceId = $pdo->lastInsertId();
+      
+      $pdo->commit();
+    } catch (Exception $e) {
+      $pdo->rollBack();
+      throw $e;
+    }
+    
+    audit_log('create','attendance',$attendanceId,['teacher_id'=>$teacherId,'type'=>'checkin','bulk'=>true,'geo_ok'=>$geoOk,'matched_school_id'=>$matchedSchoolId,'acc'=>$acc,'is_overtime'=>$isOvertimeCandidate]);
+    
+    // NSR já foi gerado no INSERT
+    $nsr = $nextNsr;
+    
+    $response = [
+      'status'=>'ok',
+      'action'=>'entrada',
+      'time'=>$now,
+      'photo'=>'/public/photos/'.$filename,
+      'teacher'=>['id'=>$teacherId,'name'=>$prof['name']],
+      'nsr'=>$nsr,
+      'attendance_id'=>$attendanceId,
+      'record_mode'=>$recordMode,
+      'is_overtime_candidate'=>$isOvertimeCandidate
+    ];
+    
+    // Adiciona mensagem específica para hora extra
+    if ($isOvertimeCandidate) {
+        $response['overtime_info'] = [
+            'message' => 'Registro em dia sem aulas regulares. Aguardando aprovação do administrador.',
+            'requires_admin_review' => true
+        ];
+    }
+    
+    return $response;
   } else {
-    // helper para aceitar "HH:MM" e "HH:MM:SS"
     $parseTime = static function (?string $str): ?DateTime {
         if (!$str) return null;
         $str = trim($str);
@@ -121,15 +227,13 @@ function process_check_item(PDO $pdo, array $item, DateTimeZone $tzBR): array {
         return DateTime::createFromFormat($fmt, $str) ?: null;
     };
 
-    // fechar saída + banco de horas (igual checkin.php)
     $pdo->beginTransaction();
     try {
       $stmt = $pdo->prepare("UPDATE attendance
-          SET check_out = ?, check_out_lat = ?, check_out_lng = ?, check_out_acc = ?, updated_at = CURRENT_TIMESTAMP, photo = ?
+          SET check_out = ?, check_out_lat = ?, check_out_lng = ?, check_out_acc = ?, updated_at = CURRENT_TIMESTAMP, photo = ?, approved = CASE WHEN ? = 1 THEN 1 ELSE approved END
           WHERE id = ?");
-      $stmt->execute([$now, $lat, $lng, $acc, $filename, $open['id']]);
+      $stmt->execute([$now, $lat, $lng, $acc, $filename, $approvedNow, $open['id']]);
 
-      // Banco de horas
       $tolerance = (int)(get_setting('tolerance_minutes', '5') ?? '5');
       $weekday = (int)(new DateTimeImmutable($today, $tzBR))->format('w');
       $expMin = 0;
@@ -156,7 +260,7 @@ function process_check_item(PDO $pdo, array $item, DateTimeZone $tzBR): array {
       $stL->execute([$teacherId, $today]);
       if ($stL->fetchColumn()) $expMin = 0;
 
-      $stW = $pdo->prepare("SELECT check_in, check_out FROM attendance WHERE teacher_id=? AND date=? AND check_in IS NOT NULL AND check_out IS NOT NULL");
+      $stW = $pdo->prepare("SELECT check_in, check_out FROM attendance WHERE teacher_id=? AND date=? AND check_in IS NOT NULL AND check_out IS NOT NULL AND approved = 1");
       $stW->execute([$teacherId, $today]);
       $worked = 0;
       while ($r = $stW->fetch(PDO::FETCH_ASSOC)) {
@@ -171,9 +275,23 @@ function process_check_item(PDO $pdo, array $item, DateTimeZone $tzBR): array {
       $insHb->execute([$teacherId, $today, $delta, 'Recalculo diário automático', $open['id']]);
 
       $pdo->commit();
-      audit_log('update','attendance',$open['id'],['teacher_id'=>$teacherId,'type'=>'checkout','delta'=>$delta,'bulk'=>true]);
+      audit_log('update','attendance',$open['id'],['teacher_id'=>$teacherId,'type'=>'checkout','delta'=>$delta,'bulk'=>true,'geo_ok'=>$geoOk,'acc'=>$acc]);
 
-      return ['status'=>'ok','action'=>'saída','time'=>$now,'photo'=>'/public/photos/'.$filename,'teacher'=>['id'=>$teacherId,'name'=>$prof['name']]];
+      // Busca NSR
+      $stmtNsr = $pdo->prepare("SELECT nsr FROM attendance WHERE id = ?");
+      $stmtNsr->execute([$open['id']]);
+      $nsr = $stmtNsr->fetchColumn();
+
+      return [
+        'status'=>'ok',
+        'action'=>'saída',
+        'time'=>$now,
+        'photo'=>'/public/photos/'.$filename,
+        'teacher'=>['id'=>$teacherId,'name'=>$prof['name']],
+        'nsr'=>$nsr,
+        'attendance_id'=>$open['id'],
+        'record_mode'=>$recordMode
+      ];
     } catch (Throwable $e) {
       if ($pdo->inTransaction()) $pdo->rollBack();
       return ['status'=>'error','message'=>'Falha ao fechar ponto.'];
@@ -189,5 +307,6 @@ foreach ($payload['items'] as $idx => $item) {
     $results[] = ['index'=>$idx, 'response'=>['status'=>'error','message'=>$e->getMessage()]];
   }
 }
+
 
 echo json_encode(['status'=>'ok','results'=>$results]);

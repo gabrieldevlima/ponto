@@ -10,8 +10,32 @@ $email = trim($_POST['email'] ?? '');
 $type_id = isset($_POST['type_id']) ? (int)$_POST['type_id'] : 0;
 $pin = $_POST['pin'] ?? '';
 $base_salary = isset($_POST['base_salary']) ? (float)$_POST['base_salary'] : 0.0;
+$hourly_rate = isset($_POST['hourly_rate']) && $_POST['hourly_rate'] !== '' ? (float)$_POST['hourly_rate'] : null;
 $network_wide = isset($_POST['network_wide']) ? 1 : 0;
 $schools = isset($_POST['schools']) && is_array($_POST['schools']) ? array_values(array_unique(array_map('intval', $_POST['schools']))) : [];
+$face_descriptors_raw = $_POST['face_descriptors'] ?? '';
+$face_descriptors_clear = isset($_POST['face_descriptors_clear']) && $_POST['face_descriptors_clear'] === '1';
+$face_descriptors = null;
+$face_descriptors_provided = false;
+if ($face_descriptors_clear) {
+    $face_descriptors = null;
+    $face_descriptors_provided = true;
+} elseif ($face_descriptors_raw !== '') {
+    $decoded = json_decode($face_descriptors_raw, true);
+    if (is_array($decoded) && !empty($decoded)) {
+        $face_descriptors = $face_descriptors_raw;
+        $face_descriptors_provided = true;
+    }
+}
+
+// Verifica se a coluna hourly_rate existe
+$hasHourlyRate = false;
+try {
+  $pdo->query("SELECT hourly_rate FROM teachers LIMIT 1");
+  $hasHourlyRate = true;
+} catch (PDOException $e) {
+  // Coluna não existe
+}
 
 $schedule = $_POST['schedule'] ?? [];          // classes
 $timeSchedule = $_POST['time_schedule'] ?? []; // time
@@ -30,13 +54,30 @@ try {
   $pdo->beginTransaction();
 
   if ($id) {
-      $stmt = $pdo->prepare("UPDATE teachers SET name = ?, email = ?, type_id = ?, base_salary = ?, network_wide = ? WHERE id = ?");
-      $stmt->execute([$name, $email, $type_id, $base_salary, $network_wide, $id]);
+      $faceExpr = $face_descriptors_provided ? '?' : 'face_descriptors';
+      if ($hasHourlyRate) {
+          $sql = "UPDATE teachers SET name=?, email=?, type_id=?, base_salary=?, hourly_rate=?, network_wide=?, face_descriptors={$faceExpr} WHERE id=?";
+          $params = [$name, $email, $type_id, $base_salary, $hourly_rate, $network_wide];
+          if ($face_descriptors_provided) $params[] = $face_descriptors;
+          $params[] = $id;
+      } else {
+          $sql = "UPDATE teachers SET name=?, email=?, type_id=?, base_salary=?, network_wide=?, face_descriptors={$faceExpr} WHERE id=?";
+          $params = [$name, $email, $type_id, $base_salary, $network_wide];
+          if ($face_descriptors_provided) $params[] = $face_descriptors;
+          $params[] = $id;
+      }
+      $stmt = $pdo->prepare($sql);
+      $stmt->execute($params);
       audit_log('update','teacher',$id,['name'=>$name,'type_id'=>$type_id,'base_salary'=>$base_salary,'network_wide'=>$network_wide]);
   } else {
       $pin_hash = password_hash($pin, PASSWORD_DEFAULT);
-      $stmt = $pdo->prepare("INSERT INTO teachers (name, cpf, email, pin_hash, active, type_id, base_salary, network_wide) VALUES (?, ?, ?, ?, 1, ?, ?, ?)");
-      $stmt->execute([$name, $cpf, $email, $pin_hash, $type_id, $base_salary, $network_wide]);
+      if ($hasHourlyRate) {
+          $stmt = $pdo->prepare("INSERT INTO teachers (name, cpf, email, pin_hash, active, type_id, base_salary, hourly_rate, network_wide, face_descriptors) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)");
+          $stmt->execute([$name, $cpf, $email, $pin_hash, $type_id, $base_salary, $hourly_rate, $network_wide, $face_descriptors]);
+      } else {
+          $stmt = $pdo->prepare("INSERT INTO teachers (name, cpf, email, pin_hash, active, type_id, base_salary, network_wide, face_descriptors) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)");
+          $stmt->execute([$name, $cpf, $email, $pin_hash, $type_id, $base_salary, $network_wide, $face_descriptors]);
+      }
       $id = (int)$pdo->lastInsertId();
       audit_log('create','teacher',$id,['name'=>$name,'type_id'=>$type_id,'base_salary'=>$base_salary,'network_wide'=>$network_wide]);
   }
@@ -102,6 +143,25 @@ try {
       // mode 'none': limpar rotinas
       $pdo->prepare("DELETE FROM teacher_schedules WHERE teacher_id = ?")->execute([$id]);
       $pdo->prepare("DELETE FROM collaborator_time_schedules WHERE teacher_id = ?")->execute([$id]);
+  }
+
+  // Salvar atribuições de períodos de aula (grade horária)
+  $periodAssignments = $_POST['period_assignments'] ?? [];
+  
+  // Primeiro, remove todas as atribuições existentes
+  $pdo->prepare("DELETE FROM teacher_class_assignments WHERE teacher_id = ?")->execute([$id]);
+  
+  // Depois, insere as novas atribuições
+  if (is_array($periodAssignments) && !empty($periodAssignments)) {
+      $ins = $pdo->prepare("INSERT INTO teacher_class_assignments (teacher_id, weekday, period_id) VALUES (?, ?, ?)");
+      foreach ($periodAssignments as $weekday => $periods) {
+          if (is_array($periods)) {
+              foreach ($periods as $periodId) {
+                  $ins->execute([$id, (int)$weekday, (int)$periodId]);
+              }
+          }
+      }
+      audit_log('update', 'teacher_class_assignments', $id, ['count' => count($periodAssignments, COUNT_RECURSIVE) - count($periodAssignments)]);
   }
 
   $pdo->commit();

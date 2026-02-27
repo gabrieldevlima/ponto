@@ -123,10 +123,14 @@ if ($page > $totalPages) {
 $perPage = (int)$perPage;
 $offset = (int)$offset;
 $listSql = "
-  SELECT t.*, ct.name AS type_name
+  SELECT t.*, ct.name AS type_name,
+         GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ') as schools_list
   FROM teachers t
   LEFT JOIN collaborator_types ct ON ct.id = t.type_id
+  LEFT JOIN teacher_schools ts ON ts.teacher_id = t.id
+  LEFT JOIN schools s ON s.id = ts.school_id AND s.active = 1
   $whereSql
+  GROUP BY t.id
   ORDER BY $sortCol $dir
   LIMIT $perPage OFFSET $offset
 ";
@@ -183,32 +187,7 @@ function sort_link(string $key, string $label): string
 </head>
 
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
-    <div class="container-fluid">
-      <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="dashboard.php">
-        <img src="../img/logo.png" alt="Logo da Empresa" style="height:auto;max-width:130px;">
-      </a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#adminNavbar"><span class="navbar-toggler-icon"></span></button>
-      <div class="collapse navbar-collapse" id="adminNavbar">
-        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-          <li class="nav-item"><a class="nav-link" href="dashboard.php"><i class="bi bi-house"></i> Início</a></li>
-          <li class="nav-item"><a class="nav-link" href="attendances.php"><i class="bi bi-calendar-check"></i> Registros de Ponto</a></li>
-          <li class="nav-item"><a class="nav-link active" href="teachers.php"><i class="bi bi-person-badge"></i> Colaboradores</a></li>
-          <li class="nav-item"><a class="nav-link" href="leaves.php"><i class="bi bi-person-x"></i> Afastamentos</a></li>
-          <?php if (is_network_admin($admin)): ?>
-            <li class="nav-item"><a class="nav-link" href="schools.php"><i class="bi bi-building"></i> Instituições</a></li>
-            <li class="nav-item"><a class="nav-link" href="admins.php"><i class="bi bi-people"></i> Administradores</a></li>
-          <?php endif; ?>
-          <li class="nav-item"><a class="nav-link" href="attendance_manual.php"><i class="bi bi-plus-circle"></i> Inserir Ponto Manual</a></li>
-        </ul>
-        <span class="navbar-text me-3 d-none d-lg-inline">
-          <i class="bi bi-person-circle"></i>
-          <?= esc($_SESSION['admin_name'] ?? 'Administrador') ?>
-        </span>
-        <a href="logout.php" class="btn btn-outline-light"><i class="bi bi-box-arrow-right"></i> Sair</a>
-      </div>
-    </div>
-  </nav>
+  <?php include __DIR__ . '/_navbar.php'; ?>
 
   <div class="container-fluid">
     <div class="card rounded-3 border bg-body mb-4">
@@ -288,7 +267,13 @@ function sort_link(string $key, string $label): string
                 <td><?= esc($t['cpf']) ?></td>
                 <td><?= esc($t['email']) ?></td>
                 <td><?= esc($t['type_name'] ?? 'Não definido') ?></td>
-                <td><?= esc($t['institution'] ?? $t['school_name'] ?? $t['network_name'] ?? 'Rede de Ensino') ?></td>
+                <td>
+                  <?php if ($t['network_wide'] == 1): ?>
+                    <span class="badge bg-primary">Toda a Rede</span>
+                  <?php else: ?>
+                    <?= esc($t['schools_list'] ?? '-') ?>
+                  <?php endif; ?>
+                </td>
                 <td class="text-center">
                   <?php if ((int)$t['active'] === 1): ?>
                     <span class="badge bg-success">Ativo</span>
@@ -359,5 +344,7 @@ function sort_link(string $key, string $label): string
     </div>
   </div>
 </body>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 </html>

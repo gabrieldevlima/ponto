@@ -6,6 +6,7 @@ if (!function_exists('minutes_to_hhmm')) {
     return sprintf('%02d:%02d', $h, $m);
   }
 }
+$teacherStartDate = isset($selectedTeacher['created_at']) ? date('Y-m-d', strtotime($selectedTeacher['created_at'])) : '1900-01-01';
 ?>
 <!doctype html>
 <html lang="pt-br">
@@ -60,11 +61,26 @@ if (!function_exists('minutes_to_hhmm')) {
                 <?php foreach ($info['items'] as $it):
                   $entrada = !empty($it['check_in']) ? (new DateTime($it['check_in']))->format('H:i:s') : '-';
                   $saida = !empty($it['check_out']) ? (new DateTime($it['check_out']))->format('H:i:s') : '-';
+                  $editTxt = '';
+                  if (!empty($it['data_edicao'])) {
+                    $editTxt = ' | Editado por ' . esc($it['edited_by_username'] ?? ('#' . (int)($it['editado_por'] ?? 0))) .
+                               ' em ' . esc(date('d/m/Y H:i', strtotime($it['data_edicao']))) .
+                               ' - Motivo: ' . esc($it['motivo_edicao'] ?? '-');
+                  }
                 ?>
-                  <div class="small">Entrada: <?= esc($entrada) ?> | Saída: <?= esc($saida) ?> | Método: <?= esc($it['method'] ?? '-') ?></div>
+                  <div class="small">Entrada: <?= esc($entrada) ?> | Saída: <?= esc($saida) ?> | Método: <?= esc($it['method'] ?? '-') ?><?= $editTxt ? esc($editTxt) : '' ?></div>
                 <?php endforeach; ?>
               <?php else: ?>
-                <span class="small muted">Sem pontos</span>
+                <?php 
+                // Só marca FALTA se: tinha jornada, data já passou E após data de criação
+                $isFalta = (($info['expectedMin'] ?? 0) > 0) && ($date <= date('Y-m-d')) && ($date >= $teacherStartDate);
+                ?>
+                <?php if ($isFalta): ?>
+                  <strong style="color: #dc3545;">⚠ FALTA</strong><br>
+                  <span class="small" style="color: #dc3545;">Jornada prevista não registrada</span>
+                <?php else: ?>
+                  <span class="small muted">-</span>
+                <?php endif; ?>
               <?php endif; ?>
             </td>
             <td>
@@ -95,6 +111,25 @@ if (!function_exists('minutes_to_hhmm')) {
     </tfoot>
   </table>
 
-  <div class="footer">Gerado em <?= date('d/m/Y H:i') ?></div>
+  <?php
+    // Logo em base64 para Dompdf
+    $logoPath = __DIR__ . '/../../public/img/logo_prefeitura.png';
+    $logoBase64 = '';
+    if (file_exists($logoPath)) {
+      $logoBase64 = 'data:image/png;base64,' . base64_encode(file_get_contents($logoPath));
+    }
+  ?>
+  <div style="margin-top: 24px; text-align: center; border-top: 1px solid #ddd; padding-top: 16px;">
+    <?php if ($logoBase64): ?>
+    <div style="margin-bottom: 10px;">
+      <img src="<?= $logoBase64 ?>" alt="Prefeitura" style="height: 90px; width: auto;">
+    </div>
+    <?php endif; ?>
+    <div style="font-size: 10px; color: #666;">
+      <div>Prefeitura Municipal de Ribeira do Piauí - PI</div>
+      <div>DEEDO Sistemas - Sistema de Ponto Eletrônico</div>
+      <div style="margin-top: 4px;">Gerado em <?= date('d/m/Y H:i') ?></div>
+    </div>
+  </div>
 </body>
 </html>

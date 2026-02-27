@@ -58,12 +58,18 @@ $periodEnd = (clone $periodStart)->modify('last day of this month');
 
 // Carrega registros do mês
 $daily = [];
+$holidays = get_holidays_in_period($pdo, $periodStart->format('Y-m-d'), $periodEnd->format('Y-m-d'), null);
+
 $dt = clone $periodStart;
 while ($dt <= $periodEnd) {
     $dateStr = $dt->format('Y-m-d');
     $w = (int)$dt->format('w');
     $expectedMin = 0;
-    if ($teacher) {
+    
+    // Verifica se é dia útil
+    $isWorkday = is_working_day($pdo, $dateStr, null);
+    
+    if ($teacher && $isWorkday) {
         if (($teacher['schedule_mode'] ?? 'classes') === 'classes') {
             $cc = (int)($scheduleMap[$w]['cc'] ?? 0);
             $cm = (int)($scheduleMap[$w]['cm'] ?? 0);
@@ -82,12 +88,20 @@ while ($dt <= $periodEnd) {
             }
         }
     }
-    $daily[$dateStr] = ['expected' => $expectedMin, 'worked' => 0, 'in' => null, 'out' => null];
+    
+    $daily[$dateStr] = [
+        'expected' => $expectedMin, 
+        'worked' => 0, 
+        'in' => null, 
+        'out' => null,
+        'holiday' => isset($holidays[$dateStr]) ? $holidays[$dateStr] : null
+    ];
     $dt = $dt->modify('+1 day');
 }
 
 // Leaves aprovadas: paid => expected=0
-$stL = $pdo->prepare("SELECT l.*, lt.paid, lt.affects_bank FROM leaves l JOIN leave_types lt ON lt.id=l.type_id
+$leaves = [];
+$stL = $pdo->prepare("SELECT l.*, lt.paid, lt.affects_bank, lt.name as leave_type_name FROM leaves l JOIN leave_types lt ON lt.id=l.type_id
                       WHERE l.teacher_id = ? AND l.approved = 1 AND l.end_date >= ? AND l.start_date <= ?");
 $stL->execute([$teacher['id'] ?? 0, $periodStart->format('Y-m-d'), $periodEnd->format('Y-m-d')]);
 while ($lv = $stL->fetch(PDO::FETCH_ASSOC)) {
@@ -95,11 +109,21 @@ while ($lv = $stL->fetch(PDO::FETCH_ASSOC)) {
     $d1 = new DateTime($lv['end_date']);
     for ($d = clone $d0; $d <= $d1; $d = $d->modify('+1 day')) {
         $k = $d->format('Y-m-d');
-        if (!isset($daily[$k])) $daily[$k] = ['expected' => 0, 'worked' => 0, 'in' => null, 'out' => null];
+        if (!isset($daily[$k])) $daily[$k] = ['expected' => 0, 'worked' => 0, 'in' => null, 'out' => null, 'leaves' => []];
+        
+        // Adiciona informações do afastamento
+        if (!isset($daily[$k]['leaves'])) $daily[$k]['leaves'] = [];
+        $daily[$k]['leaves'][] = [
+            'type' => $lv['leave_type_name'],
+            'paid' => (int)$lv['paid'],
+            'cid_code' => $lv['cid_code'] ?? ''
+        ];
+        
         if ((int)$lv['paid'] === 1) {
             $daily[$k]['expected'] = 0;
         }
     }
+    $leaves[] = $lv;
 }
 
 if ($teacher) {
@@ -130,12 +154,76 @@ if ($teacher) {
 
 $totalExpected = array_sum(array_column($daily, 'expected'));
 $totalWorked = array_sum(array_column($daily, 'worked'));
-$deltaMin = $totalWorked - $totalExpected;
-$minuteValue = ($totalExpected > 0) ? ((float)($teacher['base_salary'] ?? 0) / (float)$totalExpected) : 0.0;
-$extrasMin = max(0, $deltaMin);
-$deficitMin = max(0, -$deltaMin);
-$extraPay = $extrasMin * $minuteValue * 1.5;
-$discountPay = $deficitMin * $minuteValue * 1.0;
+
+// Verifica se professor usa sistema de grade horária (múltiplos check-ins por período)
+$usesPeriodSystem = false;
+if ($teacher) {
+    $usesPeriodSystem = teacher_uses_period_system((int)$teacher['id']);
+}
+
+// Para professores com grade horária: pagamento SEMPRE baseado em expected (fixo)
+// Horas trabalhadas servem apenas para controle de presença
+if ($usesPeriodSystem) {
+    // Pagamento fixo baseado no número de aulas, não no tempo total
+    $deltaMin = 0; // Não considera diferenças para cálculo de extras/descontos
+    $minuteValue = ($totalExpected > 0) ? ((float)($teacher['base_salary'] ?? 0) / (float)$totalExpected) : 0.0;
+    $extrasMin = 0;
+    $deficitMin = 0;
+    $extraPay = 0;
+    $discountPay = 0;
+    
+    // HORAS EXTRAS APROVADAS (check-ins fora da grade horária)
+    // Para professores com grade: extras vêm APENAS de overtime_requests aprovadas
+    $approvedOvertime = calculate_approved_overtime(
+        (int)$teacher['id'],
+        $periodStart->format('Y-m-d'),
+        $periodEnd->format('Y-m-d')
+    );
+    
+    $overtimeMinutes = $approvedOvertime['total_minutes'];
+    $overtimeHours = $approvedOvertime['total_hours'];
+    $overtimeMultiplier = (float)get_overtime_setting('multiplier', '1.5');
+    $overtimePay = calculate_overtime_payment(
+        $overtimeMinutes,
+        (float)($teacher['base_salary'] ?? 0),
+        $totalExpected,
+        $overtimeMultiplier
+    );
+} else {
+    // Sistema tradicional: calcula extras/descontos baseado em tempo trabalhado
+    $deltaMin = $totalWorked - $totalExpected;
+    $minuteValue = ($totalExpected > 0) ? ((float)($teacher['base_salary'] ?? 0) / (float)$totalExpected) : 0.0;
+    $extrasMin = max(0, $deltaMin);
+    $deficitMin = max(0, -$deltaMin);
+    $extraPay = $extrasMin * $minuteValue * 1.5;
+    $discountPay = $deficitMin * $minuteValue * 1.0;
+    
+    // Para sistema tradicional, overtime também pode existir
+    $approvedOvertime = calculate_approved_overtime(
+        (int)$teacher['id'],
+        $periodStart->format('Y-m-d'),
+        $periodEnd->format('Y-m-d')
+    );
+    $overtimeMinutes = $approvedOvertime['total_minutes'];
+    $overtimeHours = $approvedOvertime['total_hours'];
+    $overtimeMultiplier = (float)get_overtime_setting('multiplier', '1.5');
+    $overtimePay = calculate_overtime_payment(
+        $overtimeMinutes,
+        (float)($teacher['base_salary'] ?? 0),
+        $totalExpected,
+        $overtimeMultiplier
+    );
+}
+
+// Conta faltas (dias com jornada prevista, sem registro, já passados, após data de criação)
+$totalAbsences = 0;
+$today = date('Y-m-d');
+$teacherStartDate = isset($teacher['created_at']) ? date('Y-m-d', strtotime($teacher['created_at'])) : '1900-01-01';
+foreach ($daily as $d => $v) {
+    if (($v['expected'] > 0) && ($v['worked'] == 0) && ($d <= $today) && ($d >= $teacherStartDate) && empty($v['holiday'])) {
+        $totalAbsences++;
+    }
+}
 
 // Exports
 if ($export === 'xlsx' && $teacher) {
@@ -240,32 +328,7 @@ if ($export === 'csv' && $teacher) {
 </head>
 
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
-        <div class="container-fluid">
-            <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="dashboard.php">
-                <img src="../img/logo.png" alt="Logo da Empresa" style="height:auto;max-width:130px;">
-            </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#adminNavbar"><span class="navbar-toggler-icon"></span></button>
-            <div class="collapse navbar-collapse" id="adminNavbar">
-                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-                    <li class="nav-item"><a class="nav-link" href="dashboard.php"><i class="bi bi-house"></i> Início</a></li>
-                    <li class="nav-item"><a class="nav-link" href="attendances.php"><i class="bi bi-calendar-check"></i> Registros de Ponto</a></li>
-                    <li class="nav-item"><a class="nav-link active" href="teachers.php"><i class="bi bi-person-badge"></i> Colaboradores</a></li>
-                    <li class="nav-item"><a class="nav-link" href="leaves.php"><i class="bi bi-person-x"></i> Afastamentos</a></li>
-                    <?php if (is_network_admin($adm)): ?>
-                        <li class="nav-item"><a class="nav-link" href="schools.php"><i class="bi bi-building"></i> Instituições</a></li>
-                        <li class="nav-item"><a class="nav-link" href="admins.php"><i class="bi bi-people"></i> Administradores</a></li>
-                    <?php endif; ?>
-                    <li class="nav-item"><a class="nav-link" href="attendance_manual.php"><i class="bi bi-plus-circle"></i> Inserir Ponto Manual</a></li>
-                </ul>
-                <span class="navbar-text me-3 d-none d-lg-inline">
-                    <i class="bi bi-person-circle"></i>
-                    <?= esc($_SESSION['admin_name'] ?? 'Administrador') ?>
-                </span>
-                <a href="logout.php" class="btn btn-outline-light"><i class="bi bi-box-arrow-right"></i> Sair</a>
-            </div>
-        </div>
-    </nav>
+    <?php include __DIR__ . '/_navbar.php'; ?>
     <div class="container">
         <div class="card mb-3">
             <div class="card-body">
@@ -311,6 +374,16 @@ if ($export === 'csv' && $teacher) {
             <div class="card">
                 <div class="card-body">
                     <h5 class="mb-3">Financeiro - <?= esc($teacher['name']) ?> - <?= esc((new DateTime($month . '-01'))->format('m/Y')) ?></h5>
+                    
+                    <?php if ($usesPeriodSystem): ?>
+                    <div class="alert alert-info mb-3">
+                        <i class="bi bi-info-circle me-2"></i>
+                        <strong>Sistema de Grade Horária Ativo:</strong>
+                        Este professor utiliza múltiplos check-ins por aula. O pagamento é sempre baseado no número de aulas cadastradas (Min. Previstos), 
+                        independente do tempo total registrado. Períodos ociosos entre aulas não são contabilizados.
+                    </div>
+                    <?php endif; ?>
+                    
                     <div class="row g-3 mb-3">
                         <div class="col-md-3">
                             <div class="border rounded p-3 bg-light h-100">
@@ -357,9 +430,9 @@ if ($export === 'csv' && $teacher) {
                         </div>
                         <div class="col-md-4">
                             <div class="border rounded p-3 bg-light h-100">
-                                <div class="text-muted">Extras (min) / Adicional 50%</div>
+                                <div class="text-muted"><?= $usesPeriodSystem ? 'Extras (automáticos)' : 'Extras (min) / Adicional 50%' ?></div>
                                 <div class="fs-5"><?= (int)$extrasMin ?> min / R$ <?= number_format($extraPay, 2, ',', '.') ?></div>
-                                <div class="text-muted small">Aplicado 50% sobre o valor do minuto.</div>
+                                <div class="text-muted small"><?= $usesPeriodSystem ? 'Grade horária: sempre zero' : 'Aplicado 50% sobre o valor do minuto.' ?></div>
                             </div>
                         </div>
                         <div class="col-md-4">
@@ -367,6 +440,107 @@ if ($export === 'csv' && $teacher) {
                                 <div class="text-muted">Déficit (min) / Descontos</div>
                                 <div class="fs-5"><?= (int)$deficitMin ?> min / R$ <?= number_format($discountPay, 2, ',', '.') ?></div>
                                 <div class="text-muted small">Descontos proporcionais ao valor do minuto.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <?php if (isset($overtimeMinutes) && $overtimeMinutes > 0): ?>
+                    <!-- Horas Extras Aprovadas (fora da grade) -->
+                    <div class="alert alert-success border-success">
+                        <h6 class="alert-heading">
+                            <i class="bi bi-clock-fill"></i> Horas Extras Aprovadas 
+                            <?= $usesPeriodSystem ? '(fora da grade horária)' : '' ?>
+                        </h6>
+                        <div class="row g-3 mt-2">
+                            <div class="col-md-3">
+                                <strong>Total de Horas:</strong><br>
+                                <span class="badge bg-success fs-6">
+                                    <?= number_format($overtimeHours, 2) ?>h (<?= $overtimeMinutes ?> min)
+                                </span>
+                            </div>
+                            <div class="col-md-3">
+                                <strong>Multiplicador:</strong><br>
+                                <span class="badge bg-info fs-6"><?= $overtimeMultiplier ?>x</span>
+                            </div>
+                            <div class="col-md-3">
+                                <strong>Valor Adicional:</strong><br>
+                                <span class="badge bg-success fs-6">R$ <?= number_format($overtimePay, 2, ',', '.') ?></span>
+                            </div>
+                            <div class="col-md-3">
+                                <strong>Solicitações:</strong><br>
+                                <span class="badge bg-secondary fs-6"><?= $approvedOvertime['total_requests'] ?></span>
+                            </div>
+                        </div>
+                        <?php if ($usesPeriodSystem): ?>
+                        <hr>
+                        <small class="text-muted">
+                            <i class="bi bi-info-circle"></i>
+                            Professores com grade horária: horas extras vêm apenas de check-ins aprovados fora da grade atribuída
+                            (reuniões, eventos, reposições, etc). Períodos ociosos entre aulas NÃO geram extras.
+                        </small>
+                        <?php endif; ?>
+                    </div>
+                    <?php endif; ?>
+
+                    <?php if ($totalAbsences > 0): ?>
+                    <div class="alert alert-danger d-flex align-items-center" role="alert">
+                        <i class="bi bi-exclamation-triangle-fill fs-4 me-3"></i>
+                        <div>
+                            <strong>Atenção: <?= $totalAbsences ?> falta(s) detectada(s) no período</strong>
+                            <div class="small">Dias com jornada prevista mas sem registro de ponto (marcados na tabela abaixo)</div>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
+                    <!-- Resumo Final de Pagamento -->
+                    <div class="card bg-primary bg-opacity-10 border-primary mb-4">
+                        <div class="card-body">
+                            <h5 class="card-title mb-3">
+                                <i class="bi bi-calculator"></i> Resumo de Pagamento
+                            </h5>
+                            <div class="row g-3">
+                                <div class="col-md-3">
+                                    <div class="text-muted small">Salário Base</div>
+                                    <div class="fs-4 fw-bold text-primary">
+                                        R$ <?= number_format((float)$teacher['base_salary'], 2, ',', '.') ?>
+                                    </div>
+                                </div>
+                                <?php if (isset($overtimePay) && $overtimePay > 0): ?>
+                                <div class="col-md-3">
+                                    <div class="text-muted small">+ Horas Extras</div>
+                                    <div class="fs-4 fw-bold text-success">
+                                        R$ <?= number_format($overtimePay, 2, ',', '.') ?>
+                                    </div>
+                                </div>
+                                <?php endif; ?>
+                                <?php if ($extraPay > 0): ?>
+                                <div class="col-md-3">
+                                    <div class="text-muted small">+ Extras (auto)</div>
+                                    <div class="fs-4 fw-bold text-success">
+                                        R$ <?= number_format($extraPay, 2, ',', '.') ?>
+                                    </div>
+                                </div>
+                                <?php endif; ?>
+                                <?php if ($discountPay > 0): ?>
+                                <div class="col-md-3">
+                                    <div class="text-muted small">- Descontos</div>
+                                    <div class="fs-4 fw-bold text-danger">
+                                        R$ <?= number_format($discountPay, 2, ',', '.') ?>
+                                    </div>
+                                </div>
+                                <?php endif; ?>
+                                <div class="col-md-3">
+                                    <div class="text-muted small">= TOTAL A RECEBER</div>
+                                    <div class="fs-3 fw-bold text-success">
+                                        R$ <?= number_format(
+                                            (float)$teacher['base_salary'] + 
+                                            ($overtimePay ?? 0) + 
+                                            $extraPay - 
+                                            $discountPay, 
+                                            2, ',', '.'
+                                        ) ?>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -380,16 +554,42 @@ if ($export === 'csv' && $teacher) {
                                     <th>Trabalhado (min / hh:mm)</th>
                                     <th>Primeira Entrada</th>
                                     <th>Última Saída</th>
+                                    <th>Status</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($daily as $d => $v): ?>
-                                    <tr>
-                                        <td><?= esc((new DateTime($d))->format('d/m/Y')) ?></td>
+                                    <?php
+                                    // Só marca FALTA se: tinha jornada, não trabalhou, data já passou, não é feriado E após data de criação
+                                    $isFalta = ($v['expected'] > 0) && ($v['worked'] == 0) && ($d <= date('Y-m-d')) && ($d >= $teacherStartDate) && empty($v['holiday']);
+                                    ?>
+                                    <tr <?= !empty($v['holiday']) ? 'class="table-danger"' : '' ?>>
+                                        <td>
+                                            <?= esc((new DateTime($d))->format('d/m/Y')) ?>
+                                            <?php if (!empty($v['holiday'])): ?>
+                                                <div class="badge bg-danger mt-1"><?= esc($v['holiday']['name']) ?></div>
+                                            <?php endif; ?>
+                                        </td>
                                         <td><?= (int)$v['expected'] ?> (<?= minutes_to_hhmm((int)$v['expected']) ?>)</td>
                                         <td><?= (int)$v['worked'] ?> (<?= minutes_to_hhmm((int)$v['worked']) ?>)</td>
                                         <td><?= $v['in'] ? esc((new DateTime($v['in']))->format('H:i:s')) : '-' ?></td>
                                         <td><?= $v['out'] ? esc((new DateTime($v['out']))->format('H:i:s')) : '-' ?></td>
+                                        <td>
+                                            <?php if (!empty($v['leaves'])): ?>
+                                                <?php foreach ($v['leaves'] as $leave): ?>
+                                                    <div class="badge bg-info mb-1">
+                                                        🏥 <?= esc($leave['type']) ?>
+                                                        <?= $leave['paid'] ? ' (Rem.)' : '' ?>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            <?php elseif ($isFalta): ?>
+                                                <span class="badge bg-danger text-white">
+                                                    <i class="bi bi-exclamation-triangle-fill"></i> FALTA
+                                                </span>
+                                            <?php else: ?>
+                                                <span class="text-muted">-</span>
+                                            <?php endif; ?>
+                                        </td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -398,15 +598,69 @@ if ($export === 'csv' && $teacher) {
                                     <td>Total</td>
                                     <td><?= (int)$totalExpected ?> (<?= minutes_to_hhmm((int)$totalExpected) ?>)</td>
                                     <td><?= (int)$totalWorked ?> (<?= minutes_to_hhmm((int)$totalWorked) ?>)</td>
-                                    <td colspan="2"></td>
+                                    <td colspan="3"></td>
                                 </tr>
                             </tfoot>
                         </table>
-                        <div class="text-muted small">
+                        
+                        <?php if (!empty($leaves)): ?>
+                        <div class="card shadow-sm mt-4">
+                            <div class="card-header bg-info text-white">
+                                <h6 class="mb-0"><i class="bi bi-person-x me-2"></i>Afastamentos no Período</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-bordered">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Tipo</th>
+                                                <th>Período</th>
+                                                <th>Dias</th>
+                                                <th>Remunerado</th>
+                                                <th>Impacto Financeiro</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php foreach ($leaves as $lv): ?>
+                                                <?php
+                                                $startFmt = (new DateTime($lv['start_date']))->format('d/m/Y');
+                                                $endFmt = (new DateTime($lv['end_date']))->format('d/m/Y');
+                                                $daysCount = $lv['days_count'] ?? ((new DateTime($lv['start_date']))->diff(new DateTime($lv['end_date']))->days + 1);
+                                                $isPaid = (int)$lv['paid'];
+                                                ?>
+                                                <tr>
+                                                    <td><?= esc($lv['leave_type_name']) ?></td>
+                                                    <td><?= esc($startFmt) ?> até <?= esc($endFmt) ?></td>
+                                                    <td class="text-center"><span class="badge bg-info"><?= $daysCount ?> dia<?= $daysCount != 1 ? 's' : '' ?></span></td>
+                                                    <td class="text-center"><?= $isPaid ? '<span class="badge bg-success">Sim</span>' : '<span class="badge bg-secondary">Não</span>' ?></td>
+                                                    <td>
+                                                        <?php if ($isPaid): ?>
+                                                            <span class="text-success">✓ Sem impacto - Horas esperadas zeradas</span>
+                                                        <?php else: ?>
+                                                            <span class="text-warning">⚠ Não remunerado - Horas esperadas mantidas</span>
+                                                        <?php endif; ?>
+                                                    </td>
+                                                </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="alert alert-info mb-0">
+                                    <i class="bi bi-info-circle me-2"></i>
+                                    <strong>Importante:</strong> Afastamentos remunerados não afetam o cálculo financeiro. 
+                                    O sistema zera automaticamente as horas esperadas nos dias de afastamento remunerado, 
+                                    garantindo que não há desconto no salário do colaborador.
+                                </div>
+                            </div>
+                        </div>
+                        <?php endif; ?>
+                        
+                        <div class="text-muted small mt-3">
                             <ul class="mb-0 ps-3">
                                 <li>Somente registros de ponto aprovados são considerados nos cálculos.</li>
                                 <li>Delta = Min. Trabalhados - Min. Previstos. Se positivo, gera extras; se negativo, gera déficit.</li>
                                 <li>Extras aplicam adicional de 50% sobre o valor do minuto. Descontos são proporcionais ao valor do minuto.</li>
+                                <li><strong>FALTAS:</strong> Dias com jornada prevista sem registro de ponto (apenas até hoje, dias futuros não são marcados).</li>
                             </ul>
                         </div>
                     </div>

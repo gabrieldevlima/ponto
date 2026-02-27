@@ -34,7 +34,6 @@ $weekdays = [0=>'Dom',1=>'Seg',2=>'Ter',3=>'Qua',4=>'Qui',5=>'Sex',6=>'Sáb'];
   <h2>Registros de Ponto</h2>
 
   <?php
-    // Exibição simples dos filtros aplicados, se informados (opcional)
     $parts = [];
     if (!empty($_GET['date1'])) $parts[] = 'De: ' . esc($_GET['date1']);
     if (!empty($_GET['date2'])) $parts[] = 'Até: ' . esc($_GET['date2']);
@@ -64,6 +63,7 @@ $weekdays = [0=>'Dom',1=>'Seg',2=>'Ter',3=>'Qua',4=>'Qui',5=>'Sex',6=>'Sáb'];
         <th>Esperado</th>
         <th>Saldo</th>
         <th>Status</th>
+        <th>Edição</th>
       </tr>
     </thead>
     <tbody>
@@ -77,6 +77,9 @@ $weekdays = [0=>'Dom',1=>'Seg',2=>'Ter',3=>'Qua',4=>'Qui',5=>'Sex',6=>'Sáb'];
           $worked = (int)($r['total_realizado_min'] ?? 0);
           $expected = (int)($r['total_esperado_min'] ?? 0);
           $saldo = (int)($r['saldo_min'] ?? ($worked - $expected));
+          $editedAt = !empty($r['data_edicao']) ? date('d/m/Y H:i', strtotime($r['data_edicao'])) : null;
+          $editedBy = $r['edited_by_username'] ?? (!empty($r['editado_por']) ? ('#' . (int)$r['editado_por']) : null);
+          $editReason = $r['motivo_edicao'] ?? '';
         ?>
           <tr>
             <td><?= esc($r['name'] ?? '-') ?></td>
@@ -90,10 +93,19 @@ $weekdays = [0=>'Dom',1=>'Seg',2=>'Ter',3=>'Qua',4=>'Qui',5=>'Sex',6=>'Sáb'];
             <td><?= fmt_min($expected) ?></td>
             <td><?= fmt_min($saldo) ?></td>
             <td><?= $badge ?></td>
+            <td>
+              <?php if ($editedAt): ?>
+                <div><strong>Por:</strong> <?= esc($editedBy ?? '-') ?></div>
+                <div><strong>Em:</strong> <?= esc($editedAt) ?></div>
+                <div class="small"><strong>Motivo:</strong> <?= esc($editReason ?: '-') ?></div>
+              <?php else: ?>
+                <span class="muted small">—</span>
+              <?php endif; ?>
+            </td>
           </tr>
         <?php endforeach; ?>
       <?php else: ?>
-        <tr><td colspan="11" class="small muted">Nenhum registro no filtro informado.</td></tr>
+        <tr><td colspan="12" class="small muted">Nenhum registro no filtro informado.</td></tr>
       <?php endif; ?>
     </tbody>
   </table>
@@ -135,6 +147,25 @@ $weekdays = [0=>'Dom',1=>'Seg',2=>'Ter',3=>'Qua',4=>'Qui',5=>'Sex',6=>'Sáb'];
     <?php endif; ?>
   <?php endif; ?>
 
-  <div class="small muted" style="margin-top: 10px;">Gerado em <?= date('d/m/Y H:i') ?></div>
+  <?php
+    // Logo em base64 para Dompdf
+    $logoPath = __DIR__ . '/../../public/img/logo_prefeitura.png';
+    $logoBase64 = '';
+    if (file_exists($logoPath)) {
+      $logoBase64 = 'data:image/png;base64,' . base64_encode(file_get_contents($logoPath));
+    }
+  ?>
+  <div style="margin-top: 24px; text-align: center; border-top: 1px solid #ddd; padding-top: 16px;">
+    <?php if ($logoBase64): ?>
+    <div style="margin-bottom: 10px;">
+      <img src="<?= $logoBase64 ?>" alt="Prefeitura" style="height: 90px; width: auto;">
+    </div>
+    <?php endif; ?>
+    <div style="font-size: 10px; color: #666;">
+      <div>Prefeitura Municipal de Ribeira do Piauí - PI</div>
+      <div>DEEDO Sistemas - Sistema de Ponto Eletrônico</div>
+      <div style="margin-top: 4px;">Gerado em <?= date('d/m/Y H:i') ?></div>
+    </div>
+  </div>
 </body>
 </html>

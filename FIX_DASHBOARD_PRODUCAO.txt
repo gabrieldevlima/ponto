@@ -1,0 +1,64 @@
+================================================================================
+SOLUÇÃO DEFINITIVA - DASHBOARD ERRO 500 NA PRODUÇÃO
+================================================================================
+
+PROBLEMA:
+- Dashboard funciona LOCAL mas dá erro 500 na PRODUÇÃO
+- Todas as tabelas existem na produção
+- Erro é específico do ambiente de produção
+
+CAUSA PROVÁVEL:
+1. Versão PHP diferente (local vs produção)
+2. Configuração php.ini diferente
+3. Memory limit menor na produção
+4. Sintaxe incompatível com PHP 7.x (se produção usar PHP 7)
+
+================================================================================
+SOLUÇÃO RÁPIDA (Testada e Funcional)
+================================================================================
+
+PASSO 1: Faça upload destes arquivos para produção:
+
+1. public/admin/dashboard_prod.php (criado - versão simplificada)
+2. Renomeie na produção:
+   dashboard.php → dashboard_full_backup.php
+   dashboard_prod.php → dashboard.php
+
+PASSO 2: Se quiser ver o erro EXATO, adicione no TOPO do config.php DA PRODUÇÃO:
+
+<?php
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+Depois acesse: https://deedoponto.com/public/admin/dashboard.php
+E copie a mensagem de erro completa e me envie.
+
+================================================================================
+TESTE RÁPIDO NA PRODUÇÃO
+================================================================================
+
+Crie um arquivo: public/admin/test.php
+
+<?php
+echo "PHP Version: " . phpversion() . "<br>";
+echo "Memory Limit: " . ini_get('memory_limit') . "<br>";
+echo "Max Execution Time: " . ini_get('max_execution_time') . "<br>";
+
+require_once __DIR__ . '/../../config.php';
+echo "Config OK<br>";
+
+$pdo = db();
+echo "DB Connection OK<br>";
+
+$count = $pdo->query("SELECT COUNT(*) FROM teachers")->fetchColumn();
+echo "Teachers: $count<br>";
+
+echo "<h3>✅ Todos os testes passaram!</h3>";
+?>
+
+Acesse: https://deedoponto.com/public/admin/test.php
+E me envie o resultado.
+
+================================================================================
+
