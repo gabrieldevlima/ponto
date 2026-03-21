@@ -213,6 +213,181 @@ function euclidean_distance(array $a, array $b): float {
 }
 
 /**
+ * Reconhecimento facial avancado com 3 camadas de validacao.
+ *
+ * Camada 1: Threshold — distancia minima deve ser menor que o threshold configuravel.
+ * Camada 2: Margem — gap minimo entre o melhor e o 2o melhor match (teacher diferente).
+ * Camada 3: Consenso — fracao minima dos descriptors armazenados devem bater.
+ *
+ * @param PDO $pdo Conexao PDO
+ * @param array $descriptor Array de 128 floats (descriptor facial capturado)
+ * @param string $mode 'checkin' (mais rigoroso) ou 'identify' (mais permissivo)
+ * @return array ['matched'=>bool, 'teacher'=>?array, 'best_distance'=>float,
+ *                'consensus_hits'=>int, 'consensus_total'=>int, 'margin'=>?float,
+ *                'rejection_reason'=>?string, 'all_candidates'=>array]
+ */
+function match_face_against_teachers(PDO $pdo, array $descriptor, string $mode = 'checkin'): array {
+    // Thresholds configuraveis via app_settings
+    $thresholdKey = $mode === 'identify' ? 'face_threshold_identify' : 'face_threshold_checkin';
+    $threshold     = (float)(get_setting($thresholdKey, $mode === 'identify' ? '0.50' : '0.45') ?? '0.45');
+    $marginMin     = (float)(get_setting('face_margin_min', '0.10') ?? '0.10');
+    $consensusRatio = (float)(get_setting('face_consensus_ratio', '0.40') ?? '0.40');
+
+    $emptyResult = [
+        'matched' => false,
+        'teacher' => null,
+        'best_distance' => PHP_FLOAT_MAX,
+        'consensus_hits' => 0,
+        'consensus_total' => 0,
+        'margin' => null,
+        'rejection_reason' => 'no_candidates',
+        'all_candidates' => []
+    ];
+
+    // Busca todos os professores ativos com face cadastrada
+    $stmt = $pdo->query("
+        SELECT id, name, pin_hash, active, network_wide, cpf, face_descriptors
+        FROM teachers
+        WHERE active = 1 AND face_descriptors IS NOT NULL AND face_descriptors != ''
+    ");
+
+    $candidates = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $stored = json_decode($row['face_descriptors'], true);
+        if (!is_array($stored) || empty($stored)) continue;
+
+        $bestDist = PHP_FLOAT_MAX;
+        $hits = 0;
+        $total = 0;
+
+        foreach ($stored as $ref) {
+            if (!is_array($ref) || count($ref) !== 128) continue;
+            $total++;
+            $dist = euclidean_distance($descriptor, $ref);
+            if ($dist < $bestDist) {
+                $bestDist = $dist;
+            }
+            // Consenso: conta quantos descriptors armazenados estao abaixo do threshold
+            if ($dist < $threshold) {
+                $hits++;
+            }
+        }
+
+        if ($total === 0) continue;
+
+        $candidates[] = [
+            'teacher' => $row,
+            'best_distance' => $bestDist,
+            'consensus_hits' => $hits,
+            'consensus_total' => $total,
+        ];
+    }
+
+    if (empty($candidates)) {
+        return $emptyResult;
+    }
+
+    // Ordena por melhor distancia (menor = melhor match)
+    usort($candidates, fn($a, $b) => $a['best_distance'] <=> $b['best_distance']);
+
+    $best = $candidates[0];
+    $secondBest = count($candidates) > 1 ? $candidates[1] : null;
+
+    // ========== CAMADA 1: Threshold ==========
+    if ($best['best_distance'] >= $threshold) {
+        return array_merge($emptyResult, [
+            'best_distance' => $best['best_distance'],
+            'rejection_reason' => 'threshold',
+            'all_candidates' => $candidates
+        ]);
+    }
+
+    // ========== CAMADA 2: Margem entre 1o e 2o ==========
+    $margin = $secondBest ? ($secondBest['best_distance'] - $best['best_distance']) : 1.0;
+    if ($margin < $marginMin) {
+        return array_merge($emptyResult, [
+            'best_distance' => $best['best_distance'],
+            'margin' => $margin,
+            'rejection_reason' => 'margin',
+            'all_candidates' => $candidates
+        ]);
+    }
+
+    // ========== CAMADA 3: Consenso ==========
+    $requiredHits = (int)ceil($best['consensus_total'] * $consensusRatio);
+    // Com apenas 1 descriptor armazenado, consenso e automatico se threshold passou
+    if ($best['consensus_total'] > 1 && $best['consensus_hits'] < $requiredHits) {
+        return array_merge($emptyResult, [
+            'best_distance' => $best['best_distance'],
+            'consensus_hits' => $best['consensus_hits'],
+            'consensus_total' => $best['consensus_total'],
+            'margin' => $margin,
+            'rejection_reason' => 'consensus',
+            'all_candidates' => $candidates
+        ]);
+    }
+
+    // ========== MATCH APROVADO ==========
+    // Remove face_descriptors do retorno para nao vazar dados biometricos
+    $teacherData = $best['teacher'];
+    unset($teacherData['face_descriptors']);
+
+    return [
+        'matched' => true,
+        'teacher' => $teacherData,
+        'best_distance' => $best['best_distance'],
+        'consensus_hits' => $best['consensus_hits'],
+        'consensus_total' => $best['consensus_total'],
+        'margin' => $margin,
+        'rejection_reason' => null,
+        'all_candidates' => [] // Nao expor candidatos em caso de sucesso
+    ];
+}
+
+/**
+ * Detecta conflito facial: verifica se um descriptor ja pertence a outro professor.
+ * Usado durante o cadastro de face para impedir que o mesmo rosto seja cadastrado
+ * em multiplas pessoas.
+ *
+ * @param PDO $pdo Conexao PDO
+ * @param array $descriptors Array de descriptors a verificar
+ * @param int $excludeTeacherId ID do professor atual (excluir da busca)
+ * @return array|null null se nao houver conflito, ou ['teacher_id'=>int, 'teacher_name'=>string, 'distance'=>float]
+ */
+function find_face_conflict(PDO $pdo, array $descriptors, int $excludeTeacherId): ?array {
+    $conflictThreshold = (float)(get_setting('face_conflict_threshold', '0.35') ?? '0.35');
+
+    $stmt = $pdo->prepare("
+        SELECT id, name, face_descriptors
+        FROM teachers
+        WHERE id != ? AND active = 1 AND face_descriptors IS NOT NULL AND face_descriptors != ''
+    ");
+    $stmt->execute([$excludeTeacherId]);
+
+    while ($other = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $otherDescs = json_decode($other['face_descriptors'], true);
+        if (!is_array($otherDescs)) continue;
+
+        foreach ($descriptors as $newDesc) {
+            if (!is_array($newDesc) || count($newDesc) !== 128) continue;
+            foreach ($otherDescs as $existingDesc) {
+                if (!is_array($existingDesc) || count($existingDesc) !== 128) continue;
+                $dist = euclidean_distance($newDesc, $existingDesc);
+                if ($dist < $conflictThreshold) {
+                    return [
+                        'teacher_id' => (int)$other['id'],
+                        'teacher_name' => $other['name'],
+                        'distance' => round($dist, 4)
+                    ];
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
  * Distância Haversine (metros) entre dois pontos geográficos.
  */
 function haversine_distance_m(float $lat1, float $lng1, float $lat2, float $lng2): float {

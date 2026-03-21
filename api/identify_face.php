@@ -19,6 +19,57 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 csrf_verify();
 
+// ============================================================================
+// RATE LIMITING — protege contra brute-force de identificacao facial
+// ============================================================================
+$ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+$pdo = db();
+
+$rlMax    = (int)(get_setting('face_rate_limit_max', '10') ?? '10');
+$rlWindow = (int)(get_setting('face_rate_limit_window', '60') ?? '60');
+
+try {
+    // Cria tabela de rate limiting se nao existir (MEMORY engine = auto-limpa no restart)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS face_rate_limits (
+        rate_key VARCHAR(64) PRIMARY KEY,
+        attempts INT DEFAULT 0,
+        window_start DATETIME DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=MEMORY");
+
+    $rateKey = 'face_id_' . substr(hash('sha256', $ip), 0, 48);
+    $nowDt = (new DateTime('now', new DateTimeZone('America/Sao_Paulo')))->format('Y-m-d H:i:s');
+
+    $stRl = $pdo->prepare("SELECT attempts, window_start FROM face_rate_limits WHERE rate_key = ?");
+    $stRl->execute([$rateKey]);
+    $rl = $stRl->fetch(PDO::FETCH_ASSOC);
+
+    if ($rl) {
+        $elapsed = time() - strtotime($rl['window_start']);
+        if ($elapsed > $rlWindow) {
+            $pdo->prepare("UPDATE face_rate_limits SET attempts = 1, window_start = ? WHERE rate_key = ?")->execute([$nowDt, $rateKey]);
+        } elseif ((int)$rl['attempts'] >= $rlMax) {
+            if (ob_get_level()) ob_clean();
+            http_response_code(429);
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Muitas tentativas de identificação. Aguarde ' . $rlWindow . ' segundos.',
+                'retry_after' => $rlWindow - $elapsed
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        } else {
+            $pdo->prepare("UPDATE face_rate_limits SET attempts = attempts + 1 WHERE rate_key = ?")->execute([$rateKey]);
+        }
+    } else {
+        $pdo->prepare("INSERT INTO face_rate_limits (rate_key, attempts, window_start) VALUES (?, 1, ?)")->execute([$rateKey, $nowDt]);
+    }
+} catch (Throwable $e) {
+    // Nao bloquear em caso de falha no rate limiting — apenas logar
+    error_log("Rate limit check failed: " . $e->getMessage());
+}
+
+// ============================================================================
+// VALIDACAO DO DESCRIPTOR
+// ============================================================================
 $input = json_decode(file_get_contents('php://input') ?: '', true);
 if (!is_array($input)) {
     http_response_code(400);
@@ -33,51 +84,24 @@ if (!$descriptor || !is_array($descriptor) || count($descriptor) !== 128) {
     exit;
 }
 
-function face_euc_dist(array $a, array $b): float {
-    $sum = 0.0;
-    for ($i = 0; $i < 128; $i++) {
-        $diff = (float)$a[$i] - (float)$b[$i];
-        $sum += $diff * $diff;
-    }
-    return sqrt($sum);
-}
+// ============================================================================
+// MATCHING FACIAL AVANCADO (3 camadas: threshold + margem + consenso)
+// ============================================================================
+$matchResult = match_face_against_teachers($pdo, $descriptor, 'identify');
 
-$pdo = db();
-$stmt = $pdo->query("
-    SELECT id, name, cpf, face_descriptors, active, network_wide
-    FROM teachers
-    WHERE active = 1 AND face_descriptors IS NOT NULL AND face_descriptors != ''
-");
-
-$bestMatch = null;
-$bestDist = PHP_FLOAT_MAX;
-$threshold = 0.6;
-
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $stored = json_decode($row['face_descriptors'], true);
-    if (!is_array($stored)) continue;
-    foreach ($stored as $ref) {
-        if (!is_array($ref) || count($ref) !== 128) continue;
-        $dist = face_euc_dist($descriptor, $ref);
-        if ($dist < $bestDist) {
-            $bestDist = $dist;
-            $bestMatch = $row;
-        }
-    }
-}
-
-if (!$bestMatch || $bestDist >= $threshold) {
+if (!$matchResult['matched']) {
     if (ob_get_level()) ob_clean();
     echo json_encode([
         'status' => 'not_identified',
         'message' => 'Rosto não identificado. Digite seu PIN para continuar.',
-        'face_distance' => $bestDist < PHP_FLOAT_MAX ? round($bestDist, 4) : null
+        // NAO retorna face_distance para evitar que atacante calibre spoofing
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-$teacherId = (int)$bestMatch['id'];
-$pct = max(0, round((1 - $bestDist) * 100));
+$teacher = $matchResult['teacher'];
+$teacherId = (int)$teacher['id'];
+$pct = max(0, round((1 - $matchResult['best_distance']) * 100));
 
 $tzBR = new DateTimeZone('America/Sao_Paulo');
 $now = new DateTime('now', $tzBR);
@@ -118,14 +142,14 @@ echo json_encode([
     'status' => 'identified',
     'collaborator' => [
         'id' => $teacherId,
-        'name' => $bestMatch['name'],
-        'cpf' => $bestMatch['cpf'] ?? null
+        'name' => $teacher['name'],
+        'cpf' => $teacher['cpf'] ?? null
     ],
     'action' => $actionLabel,
     'action_key' => $actionKey,
     'open_record' => $openInfo,
     'message' => $message,
     'face_match' => true,
-    'face_distance' => round($bestDist, 4),
     'face_confidence' => $pct
+    // NAO retorna face_distance — seguranca contra calibracao de spoofing
 ], JSON_UNESCAPED_UNICODE);

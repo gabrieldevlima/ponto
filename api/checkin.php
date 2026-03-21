@@ -199,47 +199,54 @@ if (!$pin && !$faceAuthMode) {
 
 $pdo = db();
 
-// Helper: distância euclidiana para comparação facial server-side
-function face_euclidean_distance(array $a, array $b): float {
-    $sum = 0.0;
-    for ($i = 0; $i < 128; $i++) {
-        $diff = (float)$a[$i] - (float)$b[$i];
-        $sum += $diff * $diff;
-    }
-    return sqrt($sum);
-}
-
 // Resolve o colaborador com mensagens claras
 $prof = null;
 
 // PATH 1: Autenticação por reconhecimento facial (sem PIN)
+// Usa matching avançado com 3 camadas: threshold + margem + consenso
 if ($faceAuthMode) {
-    $stmt = $pdo->query("
-        SELECT id, name, pin_hash, active, network_wide, cpf, face_descriptors
-        FROM teachers
-        WHERE active = 1 AND face_descriptors IS NOT NULL AND face_descriptors != ''
-    ");
-    $bestMatch = null;
-    $bestDist = PHP_FLOAT_MAX;
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $stored = json_decode($row['face_descriptors'], true);
-        if (!is_array($stored)) continue;
-        foreach ($stored as $ref) {
-            if (!is_array($ref) || count($ref) !== 128) continue;
-            $dist = face_euclidean_distance($faceDescriptor, $ref);
-            if ($dist < $bestDist) {
-                $bestDist = $dist;
-                $bestMatch = $row;
-            }
-        }
+    // LIVENESS: Validar dados de vivacidade antes de aceitar face auth
+    $liveness = isset($input['liveness']) && is_array($input['liveness']) ? $input['liveness'] : null;
+    $livenessOk = false;
+    $livenessFrameCount = 0;
+
+    if ($liveness) {
+        $livenessFrameCount = (int)($liveness['frame_count'] ?? 0);
+        $livenessVarianceOk = !empty($liveness['variance_ok']);
+        $livenessOk = $livenessFrameCount >= 2 && $livenessVarianceOk;
     }
-    if ($bestMatch && $bestDist < 0.6) {
-        $prof = $bestMatch;
-    } else {
-        api_error(401, 'face_not_recognized', 'Rosto não identificado.', [
+
+    if (!$livenessOk) {
+        // Liveness nao passou — rejeita face auth, exige PIN
+        api_error(401, 'liveness_failed', 'Verificação de vivacidade falhou.', [
+            'Não foi possível confirmar que o rosto é real.',
+            'Mantenha o rosto na câmera por alguns segundos.',
+            'Use o PIN caso a câmera não esteja funcionando.'
+        ], 'face');
+    }
+
+    $faceMatchResult = match_face_against_teachers($pdo, $faceDescriptor, 'checkin');
+    $debug_times['face_match'] = round((microtime(true) - $debug_start) * 1000, 2);
+
+    if ($faceMatchResult['matched']) {
+        // Busca o row completo (match_face_against_teachers nao retorna face_descriptors)
+        $stProf = $pdo->prepare("SELECT id, name, pin_hash, active, network_wide, cpf, face_descriptors FROM teachers WHERE id = ? LIMIT 1");
+        $stProf->execute([(int)$faceMatchResult['teacher']['id']]);
+        $prof = $stProf->fetch(PDO::FETCH_ASSOC);
+    }
+
+    if (!$prof) {
+        $reason = $faceMatchResult['rejection_reason'] ?? 'threshold';
+        $hints = [
             'Não foi possível confirmar sua identidade pelo rosto.',
             'Use o PIN para registrar o ponto.'
-        ], 'face');
+        ];
+        if ($reason === 'margin') {
+            $hints[] = 'Rosto muito semelhante a outro colaborador cadastrado.';
+        } elseif ($reason === 'consensus') {
+            $hints[] = 'Reconhecimento inconsistente. Tente com melhor iluminação ou recadastre sua face.';
+        }
+        api_error(401, 'face_not_recognized', 'Rosto não identificado.', $hints, 'face');
     }
 } elseif ($cpf) {
 $stmt = $pdo->prepare("SELECT id, name, pin_hash, active, network_wide, cpf, face_descriptors FROM teachers WHERE cpf = ? LIMIT 1");
@@ -322,21 +329,9 @@ $stmt = $pdo->prepare("SELECT id, name, pin_hash, active, network_wide, cpf, fac
                 'Peça ao Admin/RH para atualizar seu PIN.'
             ], 'pin');
         } else {
-            // Verifica inativos
-            $stmtInactive = $pdo->query("SELECT id, pin_hash FROM teachers WHERE active = 0");
-            $hasInactive = false;
-            while ($rowInactive = $stmtInactive->fetch(PDO::FETCH_ASSOC)) {
-                if (password_verify($pin, $rowInactive['pin_hash'] ?? '')) {
-                    $hasInactive = true;
-                    break;
-                }
-            }
-            
-            if ($hasInactive) {
-                api_error(401, 'collaborator_inactive', 'Colaborador inativo.', [
-                    'Fale com o Admin/RH para reativar seu cadastro.'
-                ], 'pin');
-            }
+            // Mensagem generica para PIN nao encontrado (ativo ou inativo)
+            // NAO diferencia entre "PIN inexistente" e "usuario inativo" para evitar
+            // enumeracao de usuarios e vazamento de informacao
             api_error(401, 'pin_invalid', 'PIN incorreto ou inexistente.', [
                 'Confira os 6 números informados.',
                 'Se não lembra do PIN, procure o Admin/RH.'
@@ -493,7 +488,14 @@ if ($previewMode) {
 
     if (ob_get_level()) ob_clean();
     $faceDescRaw = $prof['face_descriptors'] ?? null;
-    $faceDescDecoded = $faceDescRaw ? json_decode($faceDescRaw, true) : null;
+    $hasFaceEnrolled = !empty($faceDescRaw) && !empty(json_decode($faceDescRaw, true));
+
+    // Verificacao facial server-side (se descriptor foi fornecido)
+    $faceVerified = false;
+    if ($faceAuthMode && $hasFaceEnrolled) {
+        $verifyResult = match_face_against_teachers($pdo, $faceDescriptor, 'checkin');
+        $faceVerified = $verifyResult['matched'] && (int)$verifyResult['teacher']['id'] === $teacherId;
+    }
 
     echo json_encode([
         'status' => 'preview',
@@ -507,15 +509,16 @@ if ($previewMode) {
         'open_record' => $openInfo,
         'overtime_candidate' => (bool)$isOvertimeCandidate,
         'message' => $previewMessage,
-        'face_enrolled' => !empty($faceDescDecoded),
-        'face_descriptors' => $faceDescDecoded
+        'face_enrolled' => $hasFaceEnrolled,
+        'face_verified' => $faceVerified
+        // NAO envia face_descriptors — dados biometricos nao devem ir ao frontend
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
 // Salva foto (opcional; diretório público é /public/photos)
 $dir = __DIR__ . '/../public/photos/';
-if (!is_dir($dir)) mkdir($dir, 0777, true);
+if (!is_dir($dir)) mkdir($dir, 0755, true);
 $filename = null;
 $photoQuality = null;
 $photoQualityOk = null;
@@ -638,7 +641,9 @@ if (!$isNetworkWide && !$geoOk && ($lat && $lng)) {
 $pendingReasonsJson = !empty($pendingReasons) ? json_encode($pendingReasons, JSON_UNESCAPED_UNICODE) : null;
 
 // Debug: Log dos motivos (remover depois)
-error_log("DEBUG pending_reasons - Teacher: $teacherId, Network: " . ($isNetworkWide ? 'YES' : 'NO') . ", Reasons: " . ($pendingReasonsJson ?? 'NULL'));
+if (defined('APP_DEBUG') && APP_DEBUG) {
+    error_log("DEBUG pending_reasons - Teacher: $teacherId, Network: " . ($isNetworkWide ? 'YES' : 'NO') . ", Reasons: " . ($pendingReasonsJson ?? 'NULL'));
+}
 
 // Aprovação automática: somente se foto+geo presentes e ok, qualidade ok
 // Candidatos a hora extra SEMPRE ficam pendentes (null) para aprovação do admin
@@ -775,7 +780,7 @@ if ($action === 'entrada') {
         'record_mode'=>$recordMode,
         'recorded_at'=>$recordedAt,
         'is_overtime_candidate'=>$isOvertimeCandidate,
-        'debug_performance'=>$debug_times  // DEBUG: Tempos de cada etapa
+        'debug_performance'=> (defined('APP_DEBUG') && APP_DEBUG) ? $debug_times : null
     ];
     
     // Adiciona mensagem específica para hora extra

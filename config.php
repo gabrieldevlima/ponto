@@ -26,6 +26,15 @@ define('REP_CATEGORY', 'REP-P'); // Registrador Eletrônico de Ponto via Program
 define('PORTARIA_671_COMPLIANT', true);
 define('LGPD_COMPLIANT', true);
 
+// Ambiente e debug
+define('APP_ENV', 'production');  // 'production' ou 'development'
+define('APP_DEBUG', false);       // true para incluir dados de debug nas respostas API
+
+// Verificacao de qualidade de foto habilitada por padrao
+if (!defined('PHOTO_QUALITY_CHECK_ENABLED')) {
+    define('PHOTO_QUALITY_CHECK_ENABLED', true);
+}
+
 // Função para obter configurações do empregador do banco
 function get_employer_config(): ?array {
     static $config = null;
@@ -79,5 +88,7 @@ function db(): PDO {
 }
 
 require_once __DIR__ . '/helpers.php';
-// Inicializa admin padrão no primeiro acesso (dev). Em produção, remova após criar seu admin.
-ensure_default_admin();
+// Inicializa admin padrao apenas em ambiente de desenvolvimento
+if (!defined('APP_ENV') || APP_ENV !== 'production') {
+    ensure_default_admin();
+}

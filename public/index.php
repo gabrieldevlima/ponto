@@ -3014,6 +3014,7 @@ $ogImage   = $canonical . 'img/logo_login.png';
     const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
     const APP_BASE = (document.querySelector('meta[name="app-base"]').getAttribute('content') || '/').replace(/\/+$/, '');
     const ROOT_BASE = APP_BASE.replace(/\/public$/, '');
+    const FACE_THRESHOLD = <?= json_encode((float)(get_setting('face_threshold_checkin', '0.45') ?? '0.45')) ?>;
 
     const apiUrl = (ROOT_BASE || '') + '/api/checkin.php';
     const bulkUrl = (ROOT_BASE || '') + '/api/checkin_bulk.php';
@@ -3152,7 +3153,7 @@ $ogImage   = $canonical . 'img/logo_login.png';
       }
     }
 
-    function compareFaces(desc1, storedDescriptors, threshold = 0.6) {
+    function compareFaces(desc1, storedDescriptors, threshold = FACE_THRESHOLD) {
       if (!desc1 || !storedDescriptors?.length) return { match: null, distance: null };
       let bestDist = Infinity;
       for (const stored of storedDescriptors) {
@@ -3410,7 +3411,7 @@ $ogImage   = $canonical . 'img/logo_login.png';
 function getCachedTeacherId(pin) {
   if (!pin) return null;
   try {
-    const cached = localStorage.getItem('pin_cache_' + pin);
+    const cached = sessionStorage.getItem('pin_cache_' + pin);
     const parsed = cached ? parseInt(cached, 10) : NaN;
     return Number.isNaN(parsed) ? null : parsed;
   } catch (e) {
@@ -5038,19 +5039,14 @@ updateConfirmUI();
           faceRow.style.display = '';
 
           if (data.face_enrolled && capturedDescriptor) {
-            faceIcon.className = 'd-inline-flex align-items-center justify-content-center rounded-circle bg-info-subtle text-info';
-            faceIcon.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div>';
-            faceStatusEl.textContent = 'Verificando identidade facial...';
+            // Verificacao facial agora e feita server-side (nao envia mais face_descriptors)
+            capturedFaceMatch = data.face_verified === true;
+            capturedFaceDistance = null;
 
-            const result = compareFaces(capturedDescriptor, data.face_descriptors);
-            capturedFaceMatch = result.match;
-            capturedFaceDistance = result.distance;
-
-            if (result.match === true) {
-              const pct = Math.round((1 - result.distance) * 100);
+            if (data.face_verified === true) {
               faceIcon.className = 'd-inline-flex align-items-center justify-content-center rounded-circle bg-success-subtle text-success';
               faceIcon.innerHTML = '<i class="bi bi-shield-check fs-6"></i>';
-              faceStatusEl.innerHTML = '<span class="text-success fw-semibold">Identidade confirmada (' + pct + '% de compatibilidade)</span>';
+              faceStatusEl.innerHTML = '<span class="text-success fw-semibold">Identidade confirmada por reconhecimento facial</span>';
             } else {
               faceIcon.className = 'd-inline-flex align-items-center justify-content-center rounded-circle bg-danger-subtle text-danger';
               faceIcon.innerHTML = '<i class="bi bi-shield-x fs-6"></i>';
@@ -5178,6 +5174,15 @@ updateConfirmUI();
 
         if (faceAuthMode && capturedDescriptor) {
           payload.face_descriptor = capturedDescriptor;
+          // Dados de liveness para validacao server-side
+          if (livenessData) {
+            payload.liveness = {
+              frame_count: livenessData.frameCount,
+              inter_frame_distances: livenessData.distances,
+              variance_ok: livenessData.passed,
+              avg_distance: livenessData.avgDistance
+            };
+          }
         } else {
           payload.pin = pin;
           const cachedTeacherId = getCachedTeacherId(pin);
@@ -5259,7 +5264,7 @@ updateConfirmUI();
             try {
               const teacherId = data.teacher?.id || data.collaborator?.id;
               const cacheKey = 'pin_cache_' + pin;
-              localStorage.setItem(cacheKey, teacherId.toString());
+              sessionStorage.setItem(cacheKey, teacherId.toString());
               console.log('[Cache] PIN salvo em cache:', teacherId);
               
               // Exibir status do cache se foi usado
@@ -5611,6 +5616,86 @@ updateConfirmUI();
       if (typeof showHome === 'function') showHome();
     }
 
+    // ========================================================================
+    // LIVENESS DETECTION: Extracao multi-frame com analise de variancia
+    // Um rosto real produz pequenas variacoes entre frames (movimento natural).
+    // Uma foto/video estatico produz descriptors quase identicos (variancia ~0).
+    // ========================================================================
+    let livenessData = null; // Armazena dados de liveness para enviar ao backend
+
+    async function extractMultiFrameDescriptors(videoEl, count = 3, intervalMs = 300) {
+      const descriptors = [];
+      for (let i = 0; i < count; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, intervalMs));
+        try {
+          const desc = await extractDescriptor(videoEl);
+          if (desc) descriptors.push(desc);
+        } catch (e) {
+          console.warn('[Liveness] Falha na extracao do frame', i, e);
+        }
+      }
+      return descriptors;
+    }
+
+    function computeLivenessFromDescriptors(descriptors) {
+      if (descriptors.length < 2) {
+        return { passed: false, reason: 'insufficient_frames', frameCount: descriptors.length, distances: [], avgDistance: 0 };
+      }
+
+      // Calcula distancias pairwise entre todos os descriptors
+      const distances = [];
+      for (let i = 0; i < descriptors.length; i++) {
+        for (let j = i + 1; j < descriptors.length; j++) {
+          const a = new Float32Array(descriptors[i]);
+          const b = new Float32Array(descriptors[j]);
+          const dist = faceapi.euclideanDistance(a, b);
+          distances.push(Math.round(dist * 10000) / 10000);
+        }
+      }
+
+      const avgDistance = distances.reduce((s, d) => s + d, 0) / distances.length;
+      const minVariance = <?= json_encode((float)(get_setting('face_liveness_min_variance', '0.01') ?? '0.01')) ?>;
+
+      // Rosto real: variancia inter-frame entre minVariance e 0.30
+      // Foto/video estatico: variancia < minVariance (descriptors quase identicos)
+      const allTooSimilar = distances.every(d => d < minVariance);
+      const allTooDistant = distances.some(d => d > 0.40); // Possivelmente rostos diferentes
+
+      let passed = true;
+      let reason = 'ok';
+
+      if (allTooSimilar) {
+        passed = false;
+        reason = 'static_image_detected';
+      } else if (allTooDistant) {
+        passed = false;
+        reason = 'inconsistent_face';
+      }
+
+      return { passed, reason, frameCount: descriptors.length, distances, avgDistance: Math.round(avgDistance * 10000) / 10000 };
+    }
+
+    // Seleciona o descriptor mediano (mais proximo de todos os outros)
+    function selectMedianDescriptor(descriptors) {
+      if (descriptors.length === 1) return descriptors[0];
+      let bestIdx = 0;
+      let bestTotal = Infinity;
+      for (let i = 0; i < descriptors.length; i++) {
+        let total = 0;
+        for (let j = 0; j < descriptors.length; j++) {
+          if (i === j) continue;
+          const a = new Float32Array(descriptors[i]);
+          const b = new Float32Array(descriptors[j]);
+          total += faceapi.euclideanDistance(a, b);
+        }
+        if (total < bestTotal) {
+          bestTotal = total;
+          bestIdx = i;
+        }
+      }
+      return descriptors[bestIdx];
+    }
+
     async function handleFullscreenCapture() {
       if (!fullscreenStream) return;
 
@@ -5622,6 +5707,7 @@ updateConfirmUI();
       document.body.appendChild(flash);
       setTimeout(() => flash.remove(), 300);
 
+      // Captura a foto para exibicao (do frame atual)
       const canvas = document.createElement('canvas');
       canvas.width = fullscreenVideo.videoWidth;
       canvas.height = fullscreenVideo.videoHeight;
@@ -5634,23 +5720,62 @@ updateConfirmUI();
 
       ctx.drawImage(fullscreenVideo, 0, 0);
 
-      stopFaceDetectionLoop();
-
       capturedDescriptor = null;
       capturedFaceMatch = null;
       capturedFaceDistance = null;
       faceAuthMode = false;
+      livenessData = null;
+
       if (faceApiReady) {
-        capturedDescriptor = await extractDescriptor(canvas);
-        console.log('[FaceAPI] Descriptor extraído:', capturedDescriptor ? 'sim' : 'não');
+        // LIVENESS: Extrai 3 descriptors de frames distintos do video ao vivo
+        // O video ainda esta rodando neste ponto (antes de exitFullscreenCamera)
+        console.log('[Liveness] Iniciando extracao multi-frame...');
+        const multiDescs = await extractMultiFrameDescriptors(fullscreenVideo, 3, 300);
+        console.log('[Liveness] Descriptors extraidos:', multiDescs.length);
+
+        if (multiDescs.length >= 2) {
+          // Analise de liveness
+          livenessData = computeLivenessFromDescriptors(multiDescs);
+          console.log('[Liveness] Resultado:', livenessData);
+
+          if (livenessData.passed) {
+            // Usa o descriptor mediano (mais representativo)
+            capturedDescriptor = selectMedianDescriptor(multiDescs);
+          } else if (livenessData.reason === 'static_image_detected') {
+            // Alerta: possivel foto/video — mas nao bloqueia completamente,
+            // permite fallback via PIN. Apenas impede faceAuthMode.
+            console.warn('[Liveness] ALERTA: Imagem estatica detectada!');
+            capturedDescriptor = null; // Impede face auth
+            toast('warning', 'Verificação de vivacidade', 'Detectamos uma imagem estática. Por favor, posicione seu rosto real na câmera.', [
+              'Não é possível usar fotos ou vídeos para registro.',
+              'Use o PIN caso a câmera não esteja funcionando.'
+            ]);
+          } else {
+            capturedDescriptor = selectMedianDescriptor(multiDescs);
+          }
+        } else if (multiDescs.length === 1) {
+          // Fallback: apenas 1 frame obtido (liveness nao verificavel)
+          capturedDescriptor = multiDescs[0];
+          livenessData = { passed: false, reason: 'single_frame', frameCount: 1, distances: [], avgDistance: 0 };
+          console.warn('[Liveness] Apenas 1 frame - liveness nao verificavel');
+        } else {
+          // Nenhum descriptor extraido
+          capturedDescriptor = null;
+          livenessData = { passed: false, reason: 'no_face_detected', frameCount: 0, distances: [], avgDistance: 0 };
+        }
       }
 
+      stopFaceDetectionLoop();
       capturedDataUrl = downscaleToJpeg(canvas, 500, 0.6);
       exitFullscreenCamera();
 
-      // Se temos descriptor, tentar identificação facial server-side
-      if (capturedDescriptor) {
+      // Se temos descriptor E liveness passou, tentar identificacao facial
+      if (capturedDescriptor && livenessData?.passed) {
         await tryFaceIdentification();
+      } else if (capturedDescriptor && !livenessData?.passed) {
+        // Descriptor OK mas liveness falhou — permite continuar via PIN
+        openConfirmModal();
+        showCapturedFaceBadge(true); // Mostra que rosto foi detectado
       } else {
         openConfirmModal();
         showCapturedFaceBadge(false);
@@ -5693,7 +5818,7 @@ updateConfirmUI();
           faceAuthMode = true;
           previewData = data;
           capturedFaceMatch = true;
-          capturedFaceDistance = data.face_distance;
+          capturedFaceDistance = null; // face_distance nao e mais retornado por seguranca
 
           openConfirmModal();
           showCapturedFaceBadge(true);
