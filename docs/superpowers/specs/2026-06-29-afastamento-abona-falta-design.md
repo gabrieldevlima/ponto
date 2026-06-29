@@ -56,20 +56,22 @@ O afastamento serve apenas como **registro histórico do motivo**.
 ## Mudança no banco de dados
 
 ```sql
+-- Servidor: MySQL 8.4 (não suporta ADD COLUMN IF NOT EXISTS).
 ALTER TABLE leaves
-  ADD COLUMN excuses_absence TINYINT(1) NOT NULL DEFAULT 1 AFTER approved;
+  ADD COLUMN excuses_absence TINYINT(1) NULL DEFAULT NULL AFTER approved;
 
--- Backfill preservando o comportamento atual exatamente:
--- afastamentos de tipo "pago" continuam abonando; "não pago" continuam não abonando.
+-- Backfill idempotente: preenche apenas linhas ainda NULL, preservando o
+-- comportamento atual (tipo "pago" abonava) e sem sobrescrever edições futuras.
 UPDATE leaves l JOIN leave_types lt ON lt.id = l.type_id
-  SET l.excuses_absence = lt.paid;
+  SET l.excuses_absence = lt.paid
+  WHERE l.excuses_absence IS NULL;
 ```
 
-A migração entra como rotina idempotente no bootstrap de schema do `helpers.php`,
-seguindo o padrão já usado para as outras colunas extras de `leaves` (verificar
-`information_schema`/`SHOW COLUMNS` antes do `ALTER`, e executar o backfill
-apenas quando a coluna acabou de ser criada para não sobrescrever valores
-editados depois).
+A migração é um arquivo idempotente em `sql/migrations/`, auto-aplicado pelo
+runner do `helpers.php`. A coluna é **nullable** e o backfill só toca linhas
+`NULL`, de modo que reexecuções nunca sobrescrevem valores editados depois — a
+idempotência do `ALTER` vem da tolerância do runner ao erro 1060 (coluna
+duplicada).
 
 ## Formulário de cadastro (`public/admin/leaves.php`)
 

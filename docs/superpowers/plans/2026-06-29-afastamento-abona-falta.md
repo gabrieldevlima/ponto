@@ -43,7 +43,7 @@
 
 - [ ] **Step 1: Criar o arquivo de migração**
 
-A coluna é **nullable** (sem default), e o backfill só preenche linhas `NULL` — assim a migração é idempotente (reexecução não sobrescreve valores editados depois). `ADD COLUMN IF NOT EXISTS` segue o padrão de `add_photo_deleted_flag.sql`; o runner também tolera o erro 1060 (coluna duplicada).
+A coluna é **nullable** (sem default), e o backfill só preenche linhas `NULL` — assim a migração é idempotente (reexecução não sobrescreve valores editados depois). O servidor é **MySQL 8.4** (não MariaDB), que **não** suporta `ADD COLUMN IF NOT EXISTS`; por isso usamos `ADD COLUMN` simples e a idempotência vem da tolerância do runner ao erro 1060 (coluna duplicada) no caminho statement-by-statement.
 
 `sql/migrations/2026_06_29_leave_excuses_absence.sql`:
 
@@ -58,7 +58,7 @@ A coluna é **nullable** (sem default), e o backfill só preenche linhas `NULL` 
 -- =====================================================================
 
 ALTER TABLE leaves
-  ADD COLUMN IF NOT EXISTS excuses_absence TINYINT(1) NULL DEFAULT NULL
+  ADD COLUMN excuses_absence TINYINT(1) NULL DEFAULT NULL
   COMMENT 'Se 1, este afastamento abona a falta (zera jornada). 0/NULL = conta falta'
   AFTER approved;
 
