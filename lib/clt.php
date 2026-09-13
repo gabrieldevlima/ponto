@@ -199,9 +199,13 @@ function clt_interjornada(PDO $pdo, int $teacherId, string $novaEntrada): array 
     $st = $pdo->prepare("SELECT MAX(check_out) FROM attendance
                           WHERE teacher_id = ? AND check_out IS NOT NULL
                             AND check_out < ?
+                            AND date < DATE(?)
                             AND " . attendance_vigente_sql() . "
                             AND (record_type = 'work' OR record_type IS NULL)");
-    $st->execute([$teacherId, $novaEntrada]);
+    // Só jornadas de DIAS ANTERIORES: saída de manhã e nova entrada à tarde no
+    // mesmo dia é turno dividido (intrajornada), não falta de descanso entre
+    // jornadas — contar a manhã marcaria ~9% das entradas como pendentes.
+    $st->execute([$teacherId, $novaEntrada, $novaEntrada]);
     $ultima = $st->fetchColumn();
 
     if (!$ultima) {

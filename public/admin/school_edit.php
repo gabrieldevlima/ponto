@@ -1,5 +1,11 @@
 <?php
+// O mapa da geocerca usa Leaflet (unpkg), tiles OSM/ArcGIS e Nominatim — todos
+// bloqueados pela CSP global. Página restrita a admin; política própria abaixo.
+define('SKIP_GLOBAL_CSP', true);
 require_once __DIR__ . '/../../config.php';
+if (!headers_sent()) {
+    header("Content-Security-Policy: default-src 'self'; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://fonts.googleapis.com; font-src 'self' data: https://cdn.jsdelivr.net https://fonts.gstatic.com; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; connect-src 'self' https://nominatim.openstreetmap.org; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'");
+}
 require_admin();
 $pdo = db();
 $adm = current_admin($pdo);

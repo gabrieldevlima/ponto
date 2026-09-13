@@ -326,6 +326,14 @@ function nsr_ledger_append(PDO $pdo, array $e): array {
     $hash  = nsr_ledger_hash($res['prev_hash'], $canon);
     $now   = date('Y-m-d H:i:s');
 
+    // sql_mode ESTRITO só para esta gravação. Produção (MariaDB) roda sem
+    // STRICT: um valor fora do ENUM ou maior que a coluna seria gravado truncado
+    // em silêncio, enquanto `payload_canon`/`record_hash` foram calculados sobre
+    // o valor original — a cadeia passaria a acusar "payload_divergente" para
+    // sempre. Com STRICT o INSERT falha e o chamador decide (shadow/enforced).
+    $modoAnterior = (string)$pdo->query("SELECT @@SESSION.sql_mode")->fetchColumn();
+    $pdo->exec("SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION'");
+    try {
     $sql = "INSERT INTO nsr_ledger (
                 nsr, event_type, teacher_id, teacher_cpf, teacher_pis, school_id,
                 attendance_id, mark_role, record_type, direction, marked_at, work_date,
@@ -372,6 +380,9 @@ function nsr_ledger_append(PDO $pdo, array $e): array {
         $e['legacy_nsr'] ?? null,
         $canon, $res['prev_hash'], $hash, $res['key_id'], $now,
     ]);
+    } finally {
+        $pdo->prepare("SET SESSION sql_mode = ?")->execute([$modoAnterior]);
+    }
 
     $id = (int)$pdo->lastInsertId();
 
@@ -431,11 +442,24 @@ function nsr_ledger_record_mark(PDO $pdo, array $e): ?int {
     $mode = nsr_ledger_mode();
     if ($mode === 'off') return null;
 
+    // SAVEPOINT: em shadow, a falha do livro não pode deixar meio evento na
+    // transação do ponto (contador de NSR do livro avançado sem a linha).
+    $comSavepoint = ($mode !== 'enforced') && $pdo->inTransaction();
+    if ($comSavepoint) {
+        $pdo->exec('SAVEPOINT nsr_ledger_mark');
+    }
     try {
-        return nsr_ledger_append($pdo, $e)['nsr'];
+        $nsrLivro = nsr_ledger_append($pdo, $e)['nsr'];
+        if ($comSavepoint) {
+            $pdo->exec('RELEASE SAVEPOINT nsr_ledger_mark');
+        }
+        return $nsrLivro;
     } catch (Throwable $ex) {
         if ($mode === 'enforced') {
             throw $ex; // aborta a transação junto com o INSERT em attendance
+        }
+        if ($comSavepoint) {
+            try { $pdo->exec('ROLLBACK TO SAVEPOINT nsr_ledger_mark'); } catch (Throwable $ignored) {}
         }
         error_log('[nsr_ledger][shadow] falha ao registrar marcacao'
                   . ' att=' . (string)($e['attendance_id'] ?? '?')

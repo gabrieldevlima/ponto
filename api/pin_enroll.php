@@ -246,6 +246,17 @@ if ($hasFaceEnrolled) {
     // colaborador. Se ele enviar foto, aproveitamos para cadastrar; o conflict
     // check impede vincular um rosto que já pertence a outro colaborador ativo.
     // -----------------------------------------------------------------------
+    // Mantém o comportamento em produção (hotfix 2026-09): o cadastro facial
+    // acontece ANTES de gerar o PIN para quem pode se auto-cadastrar.
+    if (!$faceProvided) {
+        if (ob_get_level()) ob_clean();
+        echo json_encode([
+            'status'  => 'require_face',
+            'reason'  => 'face_enrollment',
+            'message' => 'Vamos cadastrar sua foto agora — depois geramos seu PIN.'
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
     if ($faceProvided) {
         try {
             $initialDescriptors = normalize_face_descriptors([$faceDescriptor], 20);

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v2.59.0'; // 2026-09: hotfix auditoria — APIs nunca servidas do cache; redirect de navegação não cai no cache; tratamento de saída esquecida, fila offline sequencial.
+const CACHE_VERSION = 'v2.60.0'; // 2026-09: versão local (ledger NSR, AFD/AEJ, âncora de tempo, LGPD) — força atualização dos PWAs instalados.
 const CACHE_NAME = `ponto-cache-${CACHE_VERSION}`;
 const CACHE_RUNTIME = `ponto-runtime-${CACHE_VERSION}`;
 // C5: cache SEPARADO para os modelos face-api (~3MB). Bump de CACHE_VERSION

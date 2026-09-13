@@ -142,7 +142,12 @@ function process_check_item(PDO $pdo, array $item, DateTimeZone $tzBR): array {
 
   // Caminho preferencial: token offline assinado pelo servidor.
   if ($offToken !== '') {
-    $devId = substr(hash('sha256', $ua . $ip), 0, 64);
+    // Mesmo identificador usado na EMISSÃO (api/checkin.php): UA + fingerprint
+    // do cliente, sem IP. Antes divergiam (emissão com fingerprint, verificação
+    // sem) e TODO item offline era descartado como "outro dispositivo".
+    // $ua só é definido mais abaixo nesta função — lê o header aqui mesmo.
+    $uaTok = (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
+    $devId = substr(hash('sha256', $uaTok . '|' . (string)($item['deviceFingerprint'] ?? '')), 0, 64);
     $v = offline_auth_verify($offToken, $cpf, $devId);
     if (!$v['ok']) {
       auth_attempt_log($pdo, 'bulk_offauth', $cpf, false, (int)$prof['id'], $v['motivo']);
@@ -271,6 +276,9 @@ function process_check_item(PDO $pdo, array $item, DateTimeZone $tzBR): array {
   $tempoAut = time_anchor_authoritative($pdo, $item, 'offline', $deviceIdentifier);
   $authoritativeTime = $tempoAut['marked_at'];
   $hlbSyncStatus     = $tempoAut['hlb_status'];
+  if (!in_array($hlbSyncStatus, ['synced', 'failed', 'pending', 'legacy'], true)) {
+    $hlbSyncStatus = 'failed'; // 'stale'/'drift' não existem no ENUM
+  }
 
   // Modo do colaborador
   $stMode = $pdo->prepare("SELECT ct.schedule_mode FROM teachers t LEFT JOIN collaborator_types ct ON ct.id=t.type_id WHERE t.id=?");

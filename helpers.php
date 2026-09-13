@@ -782,8 +782,11 @@ function collaborator_consume_remember_cookie(): bool {
         ];
 
         try {
+            // Validade deslizante: cada uso renova os 90 dias. Sem isso, o token
+            // morria 90 dias após a CRIAÇÃO mesmo em uso diário (logout em massa).
             $up = $pdo->prepare("UPDATE collaborator_remember_tokens
-                                 SET last_used_at = NOW()
+                                 SET last_used_at = NOW(),
+                                     expires_at = DATE_ADD(NOW(), INTERVAL " . (int)COLLABORATOR_REMEMBER_DAYS . " DAY)
                                  WHERE id = ?");
             $up->execute([(int)$row['token_row_id']]);
         } catch (Throwable $_) { /* não bloqueia */ }

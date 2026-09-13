@@ -16,7 +16,7 @@ ALTER TABLE collaborator_remember_tokens ADD COLUMN expires_at DATETIME NULL
   COMMENT 'validade do token; NULL apos backfill indica token legado sem data';
 
 UPDATE collaborator_remember_tokens
-   SET expires_at = DATE_ADD(COALESCE(created_at, NOW()), INTERVAL 90 DAY)
+   SET expires_at = DATE_ADD(COALESCE(last_used_at, created_at, NOW()), INTERVAL 90 DAY)
  WHERE expires_at IS NULL;
 
 CREATE INDEX idx_remember_expires ON collaborator_remember_tokens (expires_at);

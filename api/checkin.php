@@ -522,7 +522,9 @@ if ($pinAuthMode) {
     // sincronizar depois — ver lib/offline_auth.php.
     if (!headers_sent() && function_exists('offline_auth_issue')) {
         $offAuth = offline_auth_issue($teacherId, (string)($row['cpf'] ?? ''),
-                                      substr(hash('sha256', $ua . $ip . $deviceFingerprintInput), 0, 64));
+                                      // Sem IP: o token precisa sobreviver à troca de rede (4G → wi-fi),
+                                      // que é justamente o cenário offline. Mesmo cálculo de checkin_bulk.php.
+                                      substr(hash('sha256', $ua . '|' . $deviceFingerprintInput), 0, 64));
         header('X-Offline-Auth: ' . $offAuth['token']);
         header('X-Offline-Auth-Expires: ' . $offAuth['expires_at']);
     }
@@ -1193,6 +1195,11 @@ $deviceIdentifier = substr(hash('sha256', $ua . $ip . $clientFingerprint), 0, 64
 $tempoAut          = time_anchor_authoritative($pdo, $input, $recordMode, $deviceIdentifier);
 $authoritativeTime = $tempoAut['marked_at'];
 $hlbSyncStatus     = $tempoAut['hlb_status'];
+// hlb_status() também devolve 'stale'/'drift', que não existem no ENUM da coluna
+// (sql_mode não estrito gravaria '' em silêncio; estrito faria o INSERT falhar).
+if (!in_array($hlbSyncStatus, ['synced', 'failed', 'pending', 'legacy'], true)) {
+    $hlbSyncStatus = 'failed';
+}
 
 // Descobre o modo de agenda do colaborador
 $stMode = $pdo->prepare("SELECT ct.schedule_mode FROM teachers t LEFT JOIN collaborator_types ct ON ct.id = t.type_id WHERE t.id = ?");
