@@ -134,7 +134,15 @@ function run_auto_migrations(): void {
             $filename = basename($filePath);
             $sql = file_get_contents($filePath);
             if (empty(trim($sql))) { $skippedCount++; continue; }
-            $contentSha = hash('sha256', $sql);
+            // Hash NORMALIZADO para LF. Os arquivos em produção têm CRLF (vieram de
+            // checkout Windows) e os do git têm LF: o hash cru divergia em 47
+            // migrations sem nenhuma mudança real de conteúdo, e o runner as
+            // reexecutava todas no primeiro request pós-deploy (ALTERs na
+            // attendance dentro de uma requisição web). Hashes antigos (crus, CRLF
+            // ou LF) continuam sendo reconhecidos como "inalterado".
+            $sqlLf       = str_replace("\r\n", "\n", $sql);
+            $contentSha  = hash('sha256', $sqlLf);
+            $knownShas   = [$contentSha, hash('sha256', $sql), hash('sha256', str_replace("\n", "\r\n", $sqlLf))];
 
             // Já aplicada? Decide entre PULAR e REEXECUTAR:
             //   - content_sha bate (ou é legado/null) → conteúdo inalterado, pula.
@@ -150,7 +158,7 @@ function run_auto_migrations(): void {
             //     forçadas a rodar de novo.
             if (array_key_exists($filename, $applied)) {
                 $prev = $applied[$filename];
-                $contentChanged = ($prev['sha'] !== null && $prev['sha'] !== $contentSha);
+                $contentChanged = ($prev['sha'] !== null && !in_array($prev['sha'], $knownShas, true));
                 if (!$contentChanged) {
                     $skippedCount++;
                     continue;
@@ -172,8 +180,17 @@ function run_auto_migrations(): void {
             $errMsg = null;
 
             try {
-                // Multi-statement primeiro
-                $migPdo->exec($cleanSql);
+                // Multi-statement primeiro. query() + nextRowset() em vez de exec():
+                // migrations com SELECT de verificação deixavam um result set não
+                // lido na conexão, e TODOS os comandos seguintes (inclusive das
+                // próximas migrations) falhavam com 2014 "unbuffered queries".
+                $stMulti = $migPdo->query($cleanSql);
+                if ($stMulti !== false) {
+                    do {
+                        if ($stMulti->columnCount() > 0) { $stMulti->fetchAll(); }
+                    } while ($stMulti->nextRowset());
+                    $stMulti->closeCursor();
+                }
                 $stmtCount = 1; // contagem aproximada
             } catch (PDOException $e) {
                 // Fallback: statement por statement (split simples por ;).
@@ -183,7 +200,11 @@ function run_auto_migrations(): void {
                 foreach ($statements as $statement) {
                     if (empty($statement)) continue;
                     try {
-                        $migPdo->exec($statement);
+                        $stOne = $migPdo->query($statement);
+                        if ($stOne !== false) {
+                            if ($stOne->columnCount() > 0) { $stOne->fetchAll(); }
+                            $stOne->closeCursor();
+                        }
                     } catch (PDOException $e2) {
                         $code = (int)$e2->errorInfo[1];
                         // Códigos esperados quando re-rodando (idempotência defensiva):
@@ -197,6 +218,10 @@ function run_auto_migrations(): void {
                         if (in_array($code, [1050, 1060, 1061, 1062, 1068, 1091, 1146, 1826], true)) {
                             continue;
                         }
+                        // MariaDB: re-add de FK com nome existente vem como 1005 errno 121.
+                        if ($code === 1005 && strpos($e2->getMessage(), 'errno: 121') !== false) {
+                            continue;
+                        }
                         $errMsg = "stmt[{$code}]: " . $e2->getMessage();
                         error_log("[migrations] erro em {$filename}: " . $errMsg);
                         $hadFatal = true;
@@ -204,6 +229,7 @@ function run_auto_migrations(): void {
                     }
                 }
                 if ($hadFatal) {
+                    $__migHadFailure = true;
                     // Grava como falha persistente para o admin investigar.
                     // Reconcilia também content_sha (+duração/contagem): se um
                     // migration COM DRIFT falhar ao reexecutar, manter o hash
@@ -251,6 +277,7 @@ function run_auto_migrations(): void {
                 $appliedCount++;
                 error_log("[migrations] aplicada {$filename} ({$durationMs}ms, {$stmtCount} stmts)");
             } catch (Throwable $e) {
+                $__migHadFailure = true;
                 error_log("[migrations] falha ao registrar {$filename}: " . $e->getMessage());
             }
         }
@@ -260,7 +287,8 @@ function run_auto_migrations(): void {
         }
         // Varredura completa terminou: grava a assinatura para as próximas
         // requisições pularem o runner até algum .sql mudar.
-        if ($__migSig !== null) {
+        // Só com a varredura LIMPA: com falha, o próximo request tenta de novo.
+        if ($__migSig !== null && empty($__migHadFailure)) {
             @file_put_contents($__migStamp, $__migSig, LOCK_EX);
         }
     } catch (Throwable $e) {
@@ -315,13 +343,14 @@ function migrations_status(): array {
         foreach ($files as $filePath) {
             $filename = basename($filePath);
             $sql = @file_get_contents($filePath);
-            $sha = $sql !== false ? hash('sha256', $sql) : null;
+            $sha = $sql !== false ? hash('sha256', str_replace("\r\n", "\n", $sql)) : null;
+            $shaVariants = $sql !== false ? [$sha, hash('sha256', $sql), hash('sha256', str_replace("\n", "\r\n", str_replace("\r\n", "\n", $sql)))] : [];
             if (!array_key_exists($filename, $applied)) {
                 $out['pending'][] = $filename;
                 continue;
             }
             $row = $applied[$filename];
-            $drift = $sha && !empty($row['content_sha']) && $row['content_sha'] !== $sha;
+            $drift = $sha && !empty($row['content_sha']) && !in_array($row['content_sha'], $shaVariants, true);
             $out['applied'][] = [
                 'filename'      => $filename,
                 'applied_at'    => $row['applied_at'],
