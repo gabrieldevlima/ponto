@@ -73,3 +73,27 @@ revalidados.
 - `payroll.php` com parâmetro `month` malformado gera erro fatal (pré-existente, igual em produção).
 - Scripts `bin/*.php` usam funções do PHP 8: rodar sempre com `/opt/alt/php83/usr/bin/php`.
 - Comprovante em PDF leva ~5 s (pré-existente).
+
+## 6. Verificação completa da produção (13/09/2026, 15h30, domingo)
+
+Somente leitura; telas logadas renderizadas no próprio servidor com banco em sessão READ ONLY.
+
+| Área | Resultado |
+|---|---|
+| Arquivos do hotfix | 23/23 idênticos ao pacote validado; nenhum PHP em pastas de upload |
+| Esquema do banco | idêntico ao de 12/09; 62 migrations, 0 falhas; NSR único |
+| Log PHP desde o deploy (13:26) | 0 linhas |
+| Rotas sem login (90) | nenhuma expõe dado; 13 respondem 200 (login, APIs públicas, templates/partials vazios) |
+| APIs com entrada inválida (22 testes) | todas recusam com código claro, sem 500 nem stack trace |
+| Telas logadas com dados reais (38 admin + 5 colaborador + 2 APIs) | todas 200, < 200 ms, sem aviso PHP |
+| HTTPS / HSTS / cookies | 301→HTTPS, HSTS 1 ano, cookie Secure+HttpOnly+Lax, SSL válido até 03/11/2026 |
+| CDN | páginas dinâmicas não cacheadas; `/public/sw.js` v2.59.0 em todas as bordas |
+| Latência (mediana) | ~0,2 s em login e APIs |
+
+**Problemas encontrados**
+- Dashboard: bloco "top afastamentos" vazio por mistura de collation (pré-existente) — corrigido na versão local (`29c56e2`).
+- `/sw.js` (URL não usada pelo app) com cópia antiga v2.58.0 numa borda do CDN por até 7 dias — purgar cache do CDN no hPanel.
+- Templates/partials `_*.php` do admin acessíveis direto (sem dados; alguns dão 500) — bloquear `^_` no `.htaccess` do admin.
+- Pré-flight CORS de `pin_recover.php` reflete qualquer origem (baixo impacto após o hotfix).
+- **Segunda 07h:** 15 colaboradores com entrada aberta há mais de 30h (sexta/sábado) serão bloqueados até regularizar a saída; 66 regularizações pendentes aguardam o admin.
+- Sem cron de expurgo de fotos e sem backup automatizado do banco deste site.
