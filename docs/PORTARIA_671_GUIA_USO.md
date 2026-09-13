@@ -49,7 +49,7 @@ WHERE id = 1;
 2. Aceite o termo de consentimento LGPD (primeira vez)
 3. Registre um ponto de entrada
 4. Verifique se o NSR foi gerado automaticamente
-5. Acesse `/public/my_login.php` com seu PIN
+5. Acesse `/public/my_login.php` com seu CPF
 6. Visualize o comprovante digital do registro
 
 ### 3. Verificar Relógio HLB
@@ -208,7 +208,7 @@ Configuração recomendada:
 
 ### Colaborador
 
-**Portal:** `/public/my_login.php` (PIN de 6 dígitos)
+**Portal:** `/public/my_login.php` (CPF)
 
 - ✅ Visualizar histórico de pontos
 - ✅ Baixar comprovantes digitais (PDF)
@@ -360,10 +360,10 @@ Configuração recomendada:
 1. **Primeiro Acesso:**
    - Ler termo de consentimento LGPD
    - Aceitar coleta de dados biométricos
-   - Criar PIN pessoal e intransferível
+   - Ter CPF cadastrado corretamente no sistema
 
 2. **Registro de Ponto:**
-   - Sempre usar seu próprio PIN
+   - Sempre usar seu próprio CPF
    - Verificar hora no relógio sincronizado
    - Aguardar mensagem de sucesso
    - Anotar o NSR recebido
@@ -375,7 +375,7 @@ Configuração recomendada:
    - Reportar irregularidades ao RH
 
 4. **Privacidade:**
-   - Não compartilhar PIN com ninguém
+   - Não compartilhar CPF com ninguém
    - Não emprestar celular/dispositivo
    - Revogar consentimento se necessário (contatar RH)
 
@@ -423,7 +423,7 @@ Configuração recomendada:
 
 ### Segurança
 
-- ✅ PINs criptografados (bcrypt)
+- ✅ Autenticação por CPF (sem armazenamento de credenciais adicionais)
 - ✅ CSRF protection
 - ✅ Validação de entrada
 - ✅ Logs de acesso

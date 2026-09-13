@@ -55,7 +55,7 @@
 ### 6 Módulos Integrados
 
 **1. Registro de Ponto**
-- Foto + GPS + PIN
+- Foto + GPS + CPF
 - Online e offline
 - Comprovante PDF
 

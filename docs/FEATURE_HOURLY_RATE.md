@@ -299,7 +299,12 @@ UPDATE teachers SET hourly_rate = NULL;
 ### Funcionalidades Adicionais
 
 - [ ] Valor/hora diferente por dia da semana
-- [ ] Valor/hora diferente por período (diurno/noturno)
+- [ ] **Adicional noturno (Art. 73 CLT): 22h–05h com +20%** — a estrutura para jornada noturna
+      (cadastro com `end_next_day`, marcação de ponto cruzando meia-noite, relatórios) já está
+      implementada. Falta apenas calcular o adicional sobre as horas trabalhadas dentro da
+      janela 22h–05h e somar ao contracheque. Pontos a tocar: `helpers.php`
+      (`calculate_worked_minutes` pode ganhar variante `calculate_night_minutes`), procedure
+      `generate_payslip` (SQL), `_tpl_payslip_pdf.php`, `reports_financial.php`.
 - [ ] Adicional de insalubridade/periculosidade
 - [ ] Cálculo de INSS e IR estimados
 - [ ] Exportar relatório financeiro
@@ -308,7 +313,7 @@ UPDATE teachers SET hourly_rate = NULL;
 ### Campos Adicionais
 
 - [ ] `overtime_rate` - Valor da hora extra
-- [ ] `night_bonus` - Adicional noturno
+- [ ] `night_bonus` - Adicional noturno (% sobre horas em 22h–05h)
 - [ ] `weekend_bonus` - Adicional fim de semana
 - [ ] `hazard_pay` - Periculosidade/Insalubridade
 

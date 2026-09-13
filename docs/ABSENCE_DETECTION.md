@@ -173,7 +173,7 @@ Pontos: Sem pontos
 Data: 11/10/2025
 Esperado: 08:00
 Trabalhado: 00:00  (não conta ponto incompleto)
-Pontos: Entrada: 08:00 | Saída: - | Método: pin
+Pontos: Entrada: 08:00 | Saída: - | Método: cpf
 ```
 
 **Observação:** O ponto aparece, mas horas trabalhadas = 0 (ponto incompleto não é contabilizado)
@@ -289,6 +289,52 @@ if ($leave = $stL->fetch(PDO::FETCH_ASSOC)) {
 **Resultado:**
 - Afastamento remunerado → `expectedMin = 0` → **Não marca falta**
 - Afastamento não remunerado → Mantém `expectedMin` original
+
+### Abona vs. não abona (a partir de 2026-06)
+
+A decisão de abonar a falta passou a ser **por afastamento** (coluna
+`leaves.excuses_absence`), desacoplada da remuneração (`leave_types.paid`):
+
+- **Afastamento abonado** (`excuses_absence = 1`, aprovado) → zera a jornada
+  prevista → **não** marca falta nem gera desconto.
+- **Afastamento não abonado** (`excuses_absence = 0`) → mantém a jornada →
+  o dia conta como **falta justificada** (motivo registrado) + desconto integral.
+- **Sem afastamento** → **falta não justificada**.
+
+A zeragem é centralizada em `calculate_expected_minutes()` e replicada nos
+relatórios via o helper `leave_day_is_excused()`.
+
+---
+
+## 🗓️ Integração com Calendário (Feriado / Ponto Facultativo)
+
+Exceções de calendário cadastradas em **Calendário e Exceções**
+(`calendar_exceptions`) com **`is_working_day = 0`** — feriado, ponto
+facultativo, recesso, etc. — **zeram a jornada prevista** do dia, então **não**
+marcam falta (mesma lógica do afastamento abonado).
+
+```php
+// helpers.php
+if ($expMin > 0 && calendar_day_is_off($pdo, $date, $schoolId)) {
+    $expMin = 0; // feriado / ponto facultativo → não é falta
+}
+```
+
+**Pontos de atenção (corrigidos em 2026-06):**
+
+- A exceção pode ser **da rede inteira** (`school_id IS NULL`) **ou de uma
+  escola específica** (`school_id = X`). Os relatórios precisam consultar o
+  calendário com a **escola do colaborador** (`primary_school_id_for_teacher()`);
+  passar `null` ignora silenciosamente feriados de escola específica.
+- `is_working_day()` retorna `false` para sábado/domingo *por padrão*; por isso
+  a zeragem usa `calendar_day_is_off()` (apenas exceções **explícitas**
+  `is_working_day=0`), preservando quem trabalha em sábado letivo.
+- A fonte de feriados é **`calendar_exceptions`** (não existe tabela `holidays`
+  neste schema).
+
+Cobertura: `reports.php`, `teacher_monthly_report.php`, `reports_financial.php`,
+`reports_insights.php`, `my_timesheet.php` e os PDFs derivados. Teste:
+`tests/test_calendar_holiday_expected.php`.
 
 ---
 

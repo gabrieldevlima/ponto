@@ -165,7 +165,7 @@ VALUES
 ```sql
 -- Inserir entrada
 INSERT INTO attendance (teacher_id, school_id, date, check_in, method, approved)
-VALUES (1, 1, CURDATE(), CONCAT(CURDATE(), ' 08:00:00'), 'pin', 1);
+VALUES (1, 1, CURDATE(), CONCAT(CURDATE(), ' 08:00:00'), 'cpf', 1);
 
 -- Pegar ID do ponto
 SET @att_id = LAST_INSERT_ID();
@@ -277,7 +277,7 @@ approved_by_admin_id: 1 (ID do admin)
 ```sql
 -- Criar ponto
 INSERT INTO attendance (teacher_id, school_id, date, check_in, check_out, method, approved)
-VALUES (1, 1, CURDATE(), CONCAT(CURDATE(), ' 08:00:00'), CONCAT(CURDATE(), ' 19:00:00'), 'pin', NULL);
+VALUES (1, 1, CURDATE(), CONCAT(CURDATE(), ' 08:00:00'), CONCAT(CURDATE(), ' 19:00:00'), 'cpf', NULL);
 
 SET @att_id = LAST_INSERT_ID();
 

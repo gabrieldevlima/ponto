@@ -7,7 +7,7 @@
 
 ## 🎯 O QUE É
 
-Sistema completo em nuvem para controle de ponto eletrônico via celular/computador, sem necessidade de equipamento físico. Registro com foto + GPS + PIN, comprovante digital instantâneo e conformidade legal total.
+Sistema completo em nuvem para controle de ponto eletrônico via celular/computador, sem necessidade de equipamento físico. Registro com foto + GPS + CPF, comprovante digital instantâneo e conformidade legal total.
 
 ---
 
@@ -43,7 +43,7 @@ Sistema completo em nuvem para controle de ponto eletrônico via celular/computa
 
 | Módulo | Principais Recursos |
 |--------|---------------------|
-| **Registro de Ponto** | Foto + GPS + PIN • Online/Offline • Comprovante PDF • NSR único |
+| **Registro de Ponto** | Foto + GPS + CPF • Online/Offline • Comprovante PDF • NSR único |
 | **Afastamentos** | Upload atestados • CID-10 • 9 tipos • Cálculo automático |
 | **Calendário** | Feriados automáticos • Sábados letivos • Interface visual |
 | **Holerites** | Geração em lote • PDF profissional • Acesso colaborador |

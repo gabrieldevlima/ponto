@@ -24,7 +24,6 @@ X-CSRF-Token: abc123def456...
 ```json
 {
   "cpf": "12345678900",
-  "pin": "123456",
   "photo": "data:image/jpeg;base64,/9j/4AAQSkZJRg...",
   "geo": {
     "lat": -23.5505,
@@ -75,9 +74,9 @@ X-CSRF-Token: abc123def456...
 
 | Código HTTP | Code | Descrição |
 |-------------|------|-----------|
-| 400 | `pin_required` | PIN não foi informado |
+| 400 | `cpf_required` | CPF não foi informado |
 | 400 | `no_open_checkin` | Não há entrada aberta |
-| 401 | `pin_invalid` | PIN incorreto |
+| 401 | `cpf_invalid` | CPF não encontrado ou colaborador inativo |
 | 401 | `collaborator_inactive` | Colaborador inativo |
 | 500 | `server_error` | Erro no servidor |
 
@@ -518,8 +517,8 @@ class OvertimeSystemTest extends TestCase
         $this->pdo = db();
         
         // Cria colaborador de teste
-        $stmt = $this->pdo->prepare("INSERT INTO teachers (name, cpf, pin_hash, type_id, active) VALUES (?, ?, ?, 1, 1)");
-        $stmt->execute(['Test User', '12345678900', password_hash('123456', PASSWORD_DEFAULT)]);
+        $stmt = $this->pdo->prepare("INSERT INTO teachers (name, cpf, type_id, active) VALUES (?, ?, 1, 1)");
+        $stmt->execute(['Test User', '12345678900']);
         $this->teacherId = $this->pdo->lastInsertId();
     }
     

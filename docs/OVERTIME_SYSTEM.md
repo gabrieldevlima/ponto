@@ -1,5 +1,21 @@
 # Sistema de Horas Extras - DEEDO Ponto
 
+> **ATUALIZACAO 2026-05-17 — Fluxo opt-in:** o sistema NAO cria mais solicitacoes de hora
+> extra automaticamente no checkout. Quando o ponto ultrapassa a jornada, a tela de
+> sucesso (e a "Minha Folha") mostra um botao **"Solicitar hora extra"** que o
+> colaborador clica e fornece justificativa para abrir a solicitacao. So entao a
+> solicitacao entra na fila administrativa em `/admin/overtime.php`.
+>
+> - Registros antigos (criados pelo sistema antes desta mudanca) permanecem com
+>   `requested_by_employee = 0` e ficam ocultos no filtro padrao. O filtro "Origem"
+>   na tela admin permite ver os legados quando necessario.
+> - Janela retroativa: solicitacao via Minha Folha so eh permitida no mes corrente.
+> - A funcao antiga `detect_and_create_overtime()` foi substituida por
+>   `compute_overtime_exceedance()` (apenas calcula, nao grava) + `create_overtime_request()`
+>   (grava quando o colaborador solicita).
+> - Endpoint novo: `api/request_overtime.php` recebe `{attendance_id, justification, csrf}`
+>   e cria a solicitacao no mes corrente, com auditoria.
+
 ## 📋 Índice
 - [Visão Geral](#visão-geral)
 - [Fluxo de Funcionamento](#fluxo-de-funcionamento)
@@ -14,16 +30,16 @@
 
 ## Visão Geral
 
-O **Sistema de Horas Extras** é um módulo integrado ao sistema DEEDO Ponto que detecta, registra e gerencia automaticamente as horas extras trabalhadas pelos colaboradores.
+O **Sistema de Horas Extras** é um módulo integrado ao sistema DEEDO Ponto que registra e gerencia as horas extras trabalhadas pelos colaboradores. **A solicitacao eh opt-in:** o sistema calcula a extrapolacao, mas o registro na fila de analise so eh criado quando o colaborador clica em "Solicitar hora extra" e fornece justificativa.
 
 ### Características Principais
 
-✅ **Detecção Automática**: Detecta horas extras no momento do registro de saída  
-✅ **Aprovação Independente**: Ponto e hora extra têm fluxos de aprovação separados  
-✅ **Banco de Horas Integrado**: Horas aprovadas são adicionadas automaticamente ao banco  
-✅ **Interface Completa**: Painel administrativo com filtros, estatísticas e ações em lote  
-✅ **Auditoria Total**: Registro de quem aprovou/rejeitou e quando  
-✅ **Validações Inteligentes**: Múltiplas validações para garantir integridade dos dados
+✅ **Solicitacao Opt-In pelo Colaborador**: Botao "Solicitar hora extra" na tela de batida e na Minha Folha; justificativa obrigatoria
+✅ **Aprovação Independente**: Ponto e hora extra têm fluxos de aprovação separados
+✅ **Banco de Horas Integrado**: Horas aprovadas são adicionadas automaticamente ao banco
+✅ **Interface Completa**: Painel administrativo com filtros (incluindo Origem), estatísticas e ações em lote
+✅ **Auditoria Total**: Registro de quem solicitou, quem aprovou/rejeitou e quando
+✅ **Validações Inteligentes**: Recalculo server-side de minutos (anti-fraude); janela retroativa limitada ao mes corrente
 
 ---
 
@@ -291,12 +307,31 @@ function detect_and_create_overtime(
 
 Calcula minutos esperados com suporte a:
 - ✅ Modo `classes` (aulas × duração)
-- ✅ Modo `time` (horário início/fim - intervalo)
+- ✅ Modo `time` (janela completa: fim − início; `break_minutes` é **informativo**, não desconta)
+- ✅ Modo `hours` (total de minutos do dia)
 - ✅ Afastamentos remunerados (retorna 0)
 
 #### `calculate_worked_minutes()`
 
-Soma todos os pontos **APROVADOS** do colaborador no dia.
+Soma todos os pares `work` **APROVADOS** do colaborador no dia.
+
+#### `calculate_effective_worked_minutes()` — modelo "cheio vs cheio"
+
+Função **canônica** para saldo, banco de horas e hora extra. Retorna a presença
+**cheia**: pares `work` aprovados + pares `break` (aprovados ou pendentes).
+
+> **Regra de negócio:** o intervalo é um direito do colaborador (almoço/descanso)
+> e **conta como tempo trabalhado** — nunca subtrai. Ele aparece nas telas e
+> relatórios apenas como informação ("do total, X foi de intervalo").
+> A contrapartida é que o esperado é a **janela completa** da jornada.
+> Consequência: quem bate SAÍDA no almoço (em vez do botão de intervalo) tem o
+> tempo fora não contado.
+
+```
+delta = presença_cheia − janela_completa
+delta > 0  → banco recebe 0 (candidato a hora extra via overtime_requests)
+delta ≤ 0  → banco recebe delta (débito)
+```
 
 ---
 

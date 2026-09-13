@@ -1,3 +1,24 @@
+> ⚠️ **DOCUMENTO SUPERADO — NÃO USAR COMO BASE DE DECLARAÇÃO**
+>
+> A auditoria de 2026-08-05 confrontou as afirmações deste arquivo com o
+> código, o schema e o dump de produção. Várias **não se confirmaram**
+> (ver NC-19 em `AUDITORIA_CONFORMIDADE_2026-08-05.md`), entre elas:
+>
+> - `recorded_at` com precisão de milissegundos — a coluna é `datetime`, sem fração;
+> - sincronização com NTP brasileiro — `HLB_NTP_SERVER` nunca era lido; a hora
+>   vinha de `worldtimeapi.org` no navegador (corrigido na Fase 6);
+> - `_tpl_receipt_pdf.php` citado como evidência — o arquivo não existe;
+> - tabela `lgpd_consent` registrando consentimentos — tinha zero linhas
+>   e nenhuma referência no código PHP (corrigido na Fase 7);
+> - triggers de auditoria — o banco de produção não tinha trigger algum.
+>
+> **O estado real e atualizado está em
+> [AUDITORIA_CONFORMIDADE_2026-08-05.md](AUDITORIA_CONFORMIDADE_2026-08-05.md).**
+> Este arquivo é mantido apenas como registro histórico do que se afirmava
+> antes da auditoria.
+
+---
+
 # Documentação de Conformidade - Portaria MTP 671/2021
 
 ## Identificação do Sistema
@@ -61,7 +82,7 @@ O sistema DEEDO Ponto está categorizado como **REP-P** (Registrador Eletrônico
   - Identificação do sistema (REP-P)
 
 **Implementação Técnica:**
-- Portal do colaborador com acesso via PIN
+- Portal do colaborador com acesso via CPF
 - Geração de comprovantes em PDF (template: `_tpl_receipt_pdf.php`)
 - API para buscar comprovantes específicos (`api/get_receipt.php`)
 - Retenção de comprovantes por 5 anos (conforme LGPD e legislação trabalhista)
@@ -90,7 +111,7 @@ O sistema **NÃO**:
   - Colaborador pode marcar ponto a qualquer momento
   
 - ❌ Realiza marcações automáticas sem ação do colaborador
-  - Todas as marcações exigem captura de foto e confirmação via PIN
+  - Todas as marcações exigem captura de foto e confirmação via CPF
   
 - ❌ Exige autorização prévia para marcação de horas extras
   - Sistema registra todas as marcações e calcula horas extras automaticamente
@@ -240,10 +261,10 @@ Conforme Anexo VII da Portaria 671/2021, o empregador deve possuir Atestado Téc
 ### Do Colaborador
 
 1. Registrar ponto pessoalmente (não pode delegar)
-2. Utilizar PIN pessoal e intransferível
+2. Utilizar CPF pessoal e intransferível
 3. Verificar comprovante de cada marcação
 4. Reportar irregularidades imediatamente
-5. Manter sigilo do PIN
+5. Manter sigilo do CPF
 
 ## Suporte e Contato
 
@@ -280,8 +301,42 @@ Para dúvidas sobre conformidade ou suporte técnico:
 
 ---
 
-**Última atualização:** Outubro de 2024  
-**Próxima revisão:** Abril de 2025
+## Suporte a Jornada Noturna
+
+O sistema suporta jornadas de trabalho que cruzam a meia-noite (vigilantes, plantão noturno, escalas 12x36, etc.).
+
+**Modelagem:**
+
+- A tabela `collaborator_time_schedules` possui a coluna `end_next_day TINYINT(1)` (default 0).
+  Quando `= 1`, o `end_time` se refere ao **dia seguinte** ao da entrada. Permite turno de 24 horas (start_time == end_time com `end_next_day=1`).
+- A coluna `attendance.date` representa sempre o **dia da entrada (check_in)**. Para um turno
+  iniciado em 13/05 às 22:00 e finalizado em 14/05 às 06:00, `attendance.date = 2026-05-13`, e o
+  saldo de banco de horas é creditado/debitado nesse mesmo dia.
+- A função `compute_schedule_window($ts, $date)` em `helpers.php` é a única fonte de verdade
+  para calcular o intervalo expandido (com `+1 day` quando necessário) — todos os relatórios e
+  cálculos consomem essa helper.
+
+**Marcação de ponto:**
+
+- O endpoint `api/checkin.php` busca o último registro aberto (`check_in NOT NULL AND check_out IS NULL`)
+  **sem filtrar por `date`**, de forma que um vigilante que entrou às 22h consegue fechar a saída
+  às 06h do dia seguinte normalmente.
+- O `GET_LOCK` da serialização de concorrência é por `(teacher_id)` (sem data) para evitar race
+  entre 23:59 e 00:01.
+
+**Adicional noturno:** o **cálculo do adicional noturno** (22h–05h, +20% conforme Art. 73 da CLT)
+**ainda não está implementado** — ver TODO em `docs/FEATURE_HOURLY_RATE.md`. O suporte estrutural
+(modelagem e marcação) está pronto e habilita a feature em entregas futuras.
+
+**Limitação conhecida (TODO):** se a jornada noturna tiver um intervalo de descanso que cruza
+a meia-noite (entrada 22h → intervalo 02h–03h → saída 06h), a segunda entrada gera um registro
+de `attendance` com `date = dia seguinte`. Atualmente o admin precisa ajustar manualmente via
+`attendance_edit.php`. Solução automática prevista em iteração futura.
+
+---
+
+**Última atualização:** Maio de 2026
+**Próxima revisão:** Novembro de 2026
 
 ---
 

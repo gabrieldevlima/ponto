@@ -1,5 +1,95 @@
 # 🔧 Troubleshooting: Sincronização Offline
 
+## Saneamento de pontos offline antigos
+
+Antes do fix de maio/2026 múltiplos cliques offline geravam registros duplicados no banco (cada clique = novo UUID, escapava do dedupe por UNIQUE). Para limpar os duplicados que já existem, use a tela admin:
+
+**Admin → Registros → Saneamento de Pontos Offline**
+
+Permissão necessária: `attendance.dedupe`.
+
+### Como funciona
+
+- A tela detecta GRUPOS — registros do mesmo colaborador, mesma data, mesma ação (entrada ou saída), com horário a menos de 5 min uns dos outros, todos `approved=NULL` e `record_mode='offline'`.
+- O 1º registro de cada grupo (mais antigo por `client_recorded_at`) é o recomendado para MANTER.
+- Os demais ficam com `approved=0` + `superseded_by_id=<id_do_keeper>`. Continuam no banco para auditoria, mas saem da folha (`my_timesheet.php`) e da lista padrão de `attendances.php` — só aparecem com checkbox "Mostrar duplicatas".
+
+### Modos
+
+- **Aplicar recomendação (por grupo)** — 1 clique aplica a heurística automática.
+- **Manual** — abre modal com radio buttons para escolher qual registro manter.
+- **Aplicar a todos** — botão global processa todos os grupos da janela atual.
+- **Pré-visualizar tudo** — devolve resumo (manteria N, soft-deletaria M) sem alterar nada.
+
+### Auditoria
+
+Cada decisão gera:
+- 1 entrada em `audit_logs` com `action='admin_dedupe_keep'` para o keeper.
+- 1 entrada em `audit_logs` com `action='admin_soft_delete_duplicate'` para cada superseded.
+- 1 linha em `attendance_edits` com `type='admin_soft_delete_duplicate'` + snapshot completo do registro antes e depois.
+
+Consultar:
+```sql
+SELECT created_at, action, entity_id, payload
+FROM audit_logs
+WHERE action IN ('admin_dedupe_keep','admin_soft_delete_duplicate')
+ORDER BY created_at DESC LIMIT 50;
+```
+
+### Reversão
+
+```sql
+UPDATE attendance SET approved=NULL, superseded_by_id=NULL WHERE id=?;
+```
+
+### Lado PWA (fila local do dispositivo)
+
+O usuário também pode inspecionar a própria fila local. Quando há itens pendentes, aparece um ícone `bi-clipboard-pulse` ao lado do contador de pendentes no header do PWA. Abre um modal que classifica os itens em:
+- **Válidos** — serão enviados normalmente
+- **Duplicados** — equivalentes a outro item válido na janela de 24h
+- **Antigos** — criados há mais de 7 dias (recomendado descartar)
+
+E permite: "Limpar duplicados", "Descartar antigos", "Sincronizar agora".
+
+---
+
+## Dedupe automático de tentativas múltiplas
+
+A partir de maio/2026 o sistema usa três camadas de dedupe para evitar registros duplicados quando o usuário clica várias vezes offline:
+
+1. **Frontend (IndexedDB):** antes de salvar no aparelho, o sistema procura um item pendente equivalente (mesmo CPF + mesma data + mesmo tipo de ponto na janela de 24 h). Se achar, **atualiza** o item existente (incrementa `attempts`, atualiza foto/geo) em vez de criar novo.
+2. **Backend (UNIQUE constraint):** colunas `client_id` e `checkout_client_id` em `attendance` são UNIQUE. Mesmo UUID nunca insere duas vezes.
+3. **Backend (dedupe lógico):** se chegarem dois UUIDs diferentes para o mesmo teacher + mesma data + mesmo tipo dentro de 5 minutos, o segundo recebe `status: 'ok'`, `code: 'duplicate_ignored'` e vira log de auditoria em `audit_logs.action='duplicate_ignored'`.
+
+### Código de resposta novo: `duplicate_ignored`
+
+| Campo | Valor |
+|---|---|
+| `status` | `ok` |
+| `code` | `duplicate_ignored` |
+| `message` | "Entrada/Saída equivalente já registrada — esta tentativa foi ignorada." |
+| `attendance_id` | id do registro mantido |
+| `nsr` | nsr do registro mantido |
+
+**Não é erro.** O frontend trata como sucesso (deleta o item local) e mostra toast informativo:
+
+> "X tentativa(s) repetida(s) foram identificadas e ignoradas com segurança. Sua folha de ponto não foi afetada."
+
+### Para auditar tentativas duplicadas
+
+```sql
+SELECT created_at, entity_id AS attendance_kept, payload
+FROM audit_logs
+WHERE action = 'duplicate_ignored'
+  AND entity = 'attendance'
+ORDER BY created_at DESC
+LIMIT 50;
+```
+
+O campo `payload` contém `rejected_client_id`, `kept_attendance_id`, `client_recorded_at` e o motivo (`logical_dedupe_entrada` ou `logical_dedupe_saida`).
+
+---
+
 ## 🚨 Problema: Pontos não aparecem após sincronizar
 
 Quando você registra pontos offline e depois conecta, mas os pontos não aparecem no admin.
@@ -198,16 +288,16 @@ ou
 
 ---
 
-### Problema 2: PIN Inválido
+### Problema 2: CPF Inválido
 
 **Sintoma:**
 ```
 [Sync] Alguns pontos falharam
-"PIN inválido ou colaborador inativo"
+"CPF não encontrado ou colaborador inativo"
 ```
 
 **Solução:**
-1. Verifique se o PIN está correto (6 dígitos)
+1. Verifique se o CPF está correto (11 dígitos)
 2. Verifique se o colaborador está ativo no sistema
 3. Limpe o IndexedDB se necessário:
 ```javascript
@@ -290,7 +380,7 @@ drainPending();
    → Erro no servidor (verifique logs do PHP)
 
 ❌ [Sync] Alguns pontos falharam
-   → PIN inválido, colaborador inativo, ou sem rotina no dia
+   → CPF inválido, colaborador inativo, ou sem rotina no dia
 
 ❌ [Sync] Erro: Failed to fetch
    → Você ainda está offline
@@ -313,7 +403,7 @@ async function showPending() {
   console.table(all.map(x => ({
     id: x.id,
     criado: new Date(x.createdAt).toLocaleString('pt-BR'),
-    pin: x.payload.pin,
+    cpf: x.payload.cpf,
     geo: x.payload.geo ? 'Sim' : 'Não'
   })));
 }
@@ -360,7 +450,7 @@ Antes de considerar que há um bug no sistema, verifique:
 - [ ] Você está realmente online quando tenta sincronizar?
 - [ ] O CSRF token está presente e válido?
 - [ ] A URL da API está correta?
-- [ ] O PIN usado é válido e o colaborador está ativo?
+- [ ] O CPF usado é válido e o colaborador está ativo?
 - [ ] Há rotina configurada para o dia em questão?
 - [ ] Os logs mostram algum erro específico?
 

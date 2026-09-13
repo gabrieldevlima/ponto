@@ -1,5 +1,7 @@
 # 🐛 Correções: Erros do Console
 
+> **Nota:** Este documento descreve correções aplicadas quando o sistema usava PIN. Atualmente a autenticação é feita por CPF; a estrutura de formulário permanece a mesma.
+
 ## 📋 Erros Encontrados e Corrigidos
 
 ### ❌ Erro 1: IndexedDB VersionError (CRÍTICO)
@@ -54,10 +56,10 @@ req.onupgradeneeded = (e) => {
 ```
 
 **Causa:**
-O campo de PIN no modal não estava dentro de um elemento `<form>`, apenas solto no HTML.
+O campo de confirmação (antigo PIN, atual CPF) no modal não estava dentro de um elemento `<form>`, apenas solto no HTML.
 
 **Solução Aplicada:**
-Envolvi o campo PIN em um `<form>`:
+Envolvi o campo em um `<form>` (estrutura equivalente usada hoje com o campo CPF):
 
 ```html
 <!-- ANTES -->
@@ -65,9 +67,9 @@ Envolvi o campo PIN em um `<form>`:
   <input type="password" id="pinModal" ...>
 </div>
 
-<!-- DEPOIS -->
-<form id="pinForm" class="w-100" onsubmit="return false;">
-  <input type="password" id="pinModal" name="pin" ...>
+<!-- DEPOIS (estrutura equivalente para cpfForm/cpfModal) -->
+<form id="cpfForm" class="w-100" onsubmit="return false;">
+  <input type="text" id="cpfModal" name="cpf" ...>
 </form>
 ```
 
@@ -126,7 +128,7 @@ Nenhuma ação necessária. São logs normais de funcionamento.
 
 1. **`public/index.php`**
    - IndexedDB versão 2
-   - Campo PIN dentro de `<form>`
+   - Campo CPF dentro de `<form>`
    - Meta tag `mobile-web-app-capable`
 
 2. **`public/sw.js`**
@@ -160,11 +162,11 @@ indexedDB.databases().then(dbs => {
    - Logs do MediaPipe (I0000, W0000)
 ```
 
-### Teste 3: Verificar Form do PIN
+### Teste 3: Verificar Form do CPF
 ```javascript
 // No Console, execute:
-document.getElementById('pinModal').form
-// ✅ Deve retornar: <form id="pinForm">
+document.getElementById('cpfModal').form
+// ✅ Deve retornar: <form id="cpfForm">
 // ❌ NÃO deve retornar: null
 ```
 
@@ -253,7 +255,7 @@ Envolver em `<form>` resolve todos esses problemas.
 
 - [x] IndexedDB atualizado para versão 2
 - [x] Service Worker atualizado (v2.0.2)
-- [x] Campo PIN dentro de `<form>`
+- [x] Campo CPF dentro de `<form>`
 - [x] Meta tags PWA atualizadas
 - [x] Lógica de migração implementada
 - [x] Sem erros no Console

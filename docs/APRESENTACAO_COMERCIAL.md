@@ -35,7 +35,7 @@
 - Colaborador acessa pelo celular ou computador
 - Tira foto (modo selfie espelhado)
 - Sistema captura localização GPS
-- Confirmação com PIN de 6 dígitos
+- Confirmação com CPF (11 dígitos)
 - Comprovante digital em PDF instantâneo
 
 **Benefícios:**
@@ -316,7 +316,7 @@
 - ✅ NSR sequencial (nunca repete)
 - ✅ Timestamp com HLB sincronizada
 - ✅ Modo online e offline
-- ✅ Cache de PIN para uso offline
+- ✅ Autenticação por CPF (requer conexão)
 - ✅ Device fingerprint único
 
 ---
@@ -600,7 +600,7 @@
 
 ### Camadas de Proteção
 
-1. **Autenticação**: PIN hash bcrypt + biometria facial
+1. **Autenticação**: CPF + biometria facial
 2. **Comunicação**: HTTPS obrigatório
 3. **Banco de Dados**: SQL injection protected (PDO)
 4. **Interface**: XSS e CSRF protection

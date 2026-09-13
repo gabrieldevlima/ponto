@@ -218,7 +218,7 @@ DEEDO Ponto:
 📱 Adeus relógio de ponto!
 
 ✨ Novo sistema:
-• Foto + PIN
+• Foto + CPF
 • Comprovante PDF
 • Funciona offline
 • 100% legal

@@ -60,8 +60,8 @@
 - [ ] Badge online/offline atualiza
 - [ ] Registro online funciona
 - [ ] Registro offline funciona
-- [ ] PIN offline valida corretamente
-- [ ] PIN inválido rejeita offline
+- [ ] CPF offline valida corretamente (requer conexão)
+- [ ] CPF inválido rejeita
 - [ ] Comprovante PDF gera
 - [ ] NSR aparece no comprovante
 - [ ] Comprovante SEM ícones interrogados
@@ -136,7 +136,7 @@
 - [ ] Exportação PDF funciona
 
 ### Portal do Colaborador
-- [ ] Login com PIN funciona
+- [ ] Login com CPF funciona
 - [ ] "Minha Folha" carrega
 - [ ] Estatísticas exibem corretamente
 - [ ] Registros do mês listados
@@ -161,7 +161,7 @@
 - [ ] Gráfico sem dados (mês vazio)
 
 ### Validações de Erro
-- [ ] PIN errado: mensagem clara
+- [ ] CPF errado: mensagem clara
 - [ ] CPF inválido: mensagem clara
 - [ ] Sem foto: bloqueia envio
 - [ ] Sem localização: marca pendente

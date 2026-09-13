@@ -3,7 +3,7 @@
 ## 📌 Sobre o Sistema
 
 ### 1. O que é o DEEDO Ponto?
-Sistema completo de gestão de ponto eletrônico em nuvem, 100% conforme à Portaria MTP 671/2021 e LGPD. Permite que colaboradores registrem ponto por foto + GPS + PIN usando celular ou computador, sem necessidade de equipamento físico.
+Sistema completo de gestão de ponto eletrônico em nuvem, 100% conforme à Portaria MTP 671/2021 e LGPD. Permite que colaboradores registrem ponto por foto + GPS + CPF usando celular ou computador, sem necessidade de equipamento físico.
 
 ### 2. Quais empresas podem usar?
 Qualquer empresa ou instituição que precise controlar jornada de trabalho:
@@ -67,7 +67,7 @@ Seus colaboradores usam os dispositivos que já têm.
 
 ### 10. É complicado de usar?
 **Não!** Interface intuitiva:
-- **Colaborador**: 3 passos (foto + PIN + confirmar)
+- **Colaborador**: 3 passos (foto + CPF + confirmar)
 - **Admin**: Dashboard visual, sem complexidade
 - **Treinamento**: 2 horas para RH, 5 minutos para colaborador
 
@@ -169,14 +169,13 @@ Sistema preparado para auditoria:
 **4 passos simples (< 30 segundos):**
 1. Acessa pelo navegador (ou app PWA)
 2. Tira foto (modo selfie espelhado)
-3. Digite PIN de 6 dígitos
+3. Digite CPF (11 dígitos)
 4. Confirma → Recebe comprovante PDF
 
-### 21. E se o colaborador esquecer o PIN?
-Admin pode resetar em 2 cliques:
-- Gestão → Colaboradores → Resetar PIN
-- Novo PIN é enviado ao colaborador
-- Histórico de resets é auditado
+### 21. E se o CPF não for reconhecido?
+- Verifique se o CPF está correto no cadastro (Gestão → Colaboradores)
+- Colaboradores inativos não conseguem registrar ponto
+- Em caso de dúvida, contate o RH/Admin
 
 ### 22. Como funciona sábado letivo ou dia de reposição?
 **Muito simples:**
@@ -281,7 +280,7 @@ Admin pode resetar em 2 cliques:
 - Registros salvos localmente
 - Sincroniza quando tiver internet
 - Comprovante gerado offline
-- PIN validado por cache local
+- CPF validado online (requer conexão)
 
 ### 34. Posso acessar de casa/viagem?
 **Sim!** Sistema em nuvem:
@@ -307,8 +306,8 @@ Depende do plano:
 - **Admin de RH**: Permissões customizáveis
 
 ### 37. Colaborador precisa de login?
-**Para registrar ponto:** Não, só precisa do PIN  
-**Para acessar "Minha Folha":** Sim, login com PIN
+**Para registrar ponto:** Não, só precisa do CPF  
+**Para acessar "Minha Folha":** Sim, login com CPF
 
 ---
 

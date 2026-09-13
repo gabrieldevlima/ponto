@@ -307,7 +307,7 @@ Sistema completo de gestão de ponto eletrônico com conformidade legal, recurso
 ### Uso Diário
 **Colaborador:**
 - Acessa `index.php`
-- Registra ponto (foto + PIN)
+- Registra ponto (foto + CPF)
 - Vê comprovante
 - Acessa "Minha Folha"
 - Baixa holerites
@@ -371,7 +371,7 @@ Sistema completo de gestão de ponto eletrônico com conformidade legal, recurso
 - `leave_attachment_access_log` - Acessos a atestados
 
 ### Validações
-- PIN com hash bcrypt
+- Autenticação por CPF
 - CSRF em todos os forms
 - SQL injection protected (PDO)
 - XSS protected (htmlspecialchars)

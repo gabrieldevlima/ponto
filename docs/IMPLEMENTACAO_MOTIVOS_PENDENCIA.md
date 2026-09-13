@@ -171,7 +171,7 @@ Característica: `network_wide = 1`
 
 **Ainda exige:**
 - ⚠️ Foto obrigatória
-- ⚠️ PIN correto
+- ⚠️ CPF correto
 - ⚠️ Qualidade mínima da foto
 
 ---

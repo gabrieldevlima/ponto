@@ -11,8 +11,8 @@
 
 ### Passo 2: Fazer Login
 ```
-1. Digite seu PIN (6 números)
-   → O mesmo PIN que você usa para registrar ponto
+1. Digite seu CPF (11 números)
+   → O mesmo CPF cadastrado no seu registro de ponto
 2. Clique em "Acessar"
 ```
 
@@ -139,10 +139,10 @@ Exemplo: 168 horas × R$ 50,00 = R$ 8.400,00
 
 ## 🔐 Segurança
 
-### Proteja seu PIN
-- ❌ Não compartilhe seu PIN com ninguém
+### Proteja seu CPF
+- ❌ Não compartilhe seu CPF com ninguém
 - ❌ Não anote em local visível
-- ✅ Memorize ou guarde em local seguro
+- ✅ Use apenas em dispositivos seguros
 
 ### Sair do Sistema
 ```
@@ -150,11 +150,11 @@ Sempre clique em "Sair" após consultar
 → Principalmente em computadores compartilhados
 ```
 
-### Esqueceu o PIN?
+### CPF não encontrado?
 ```
-1. Contate o RH/Admin
-2. Eles podem resetar para você
-3. Nunca tente adivinhar (pode bloquear)
+1. Verifique se digitou corretamente (11 dígitos)
+2. Contate o RH/Admin para conferir seu cadastro
+3. Colaboradores inativos não conseguem acessar
 ```
 
 ---
@@ -199,14 +199,13 @@ Sempre clique em "Sair" após consultar
 ### 5. Não consigo fazer login
 
 **Possíveis causas:**
-- PIN incorreto (6 dígitos)
+- CPF incorreto ou não cadastrado
 - Cadastro inativo (fale com RH)
-- PIN duplicado (fale com Admin)
 
 **Solução:**
-1. Verifique se digitou os 6 números corretamente
+1. Verifique se digitou os 11 dígitos corretamente
 2. Tente novamente
-3. Se persistir, contate o RH
+3. Se persistir, contate o RH para conferir seu cadastro
 
 ---
 
@@ -232,7 +231,7 @@ Mas para **registrar ponto**, funciona offline e sincroniza depois.
 ### Precisa de ajuda?
 
 **Dúvidas sobre:**
-- 📍 Login/PIN → Contate RH/Admin
+- 📍 Login/CPF → Contate RH/Admin
 - 📊 Pontos pendentes → Contate seu gestor
 - 💰 Valores → Contate RH/Financeiro
 - 🐛 Problemas técnicos → Contate TI/Admin
@@ -268,7 +267,7 @@ Mas para **registrar ponto**, funciona offline e sincroniza depois.
 
 ---
 
-**💡 Mantenha seu PIN seguro e consulte sempre que precisar!**
+**💡 Mantenha seu CPF seguro e consulte sempre que precisar!**
 
 *Sistema DEEDO Ponto - Portal do Colaborador*
 

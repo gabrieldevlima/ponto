@@ -28,7 +28,7 @@
 ### 2.1 Dados Pessoais
 - Nome completo
 - CPF
-- PIN de acesso (hash criptografado)
+- CPF para autenticação (dado já cadastrado)
 - Cargo/Função
 - Escola/Unidade de lotação
 
@@ -123,10 +123,10 @@ O colaborador pode **revogar o consentimento** a qualquer momento, com as seguin
 - **Backups:** Diários, criptografados
 
 ### 6.2 Medidas de Segurança
-✅ Criptografia de dados sensíveis (PIN com bcrypt)  
+✅ Autenticação por CPF (sem armazenamento de credenciais adicionais)  
 ✅ Controle de acesso por níveis (admin/colaborador)  
 ✅ Logs de auditoria para todas as alterações  
-✅ Autenticação obrigatória (PIN de 6 dígitos)  
+✅ Autenticação obrigatória (CPF)  
 ✅ CSRF protection  
 ✅ Validação de geolocalização  
 ✅ Firewall e proteção contra ataques  
@@ -183,7 +183,7 @@ Conforme Art. 18 da LGPD, você tem direito a:
 Para exercer qualquer dos direitos acima:
 
 ### Método 1: Portal do Colaborador
-Acesse `/my_login.php` com seu PIN e visualize/exporte seus dados
+Acesse `/my_login.php` com seu CPF e visualize/exporte seus dados
 
 ### Método 2: Solicitação ao RH
 - E-mail: [rh@empresa.com.br]
@@ -240,6 +240,52 @@ O sistema utiliza as seguintes tecnologias:
 
 ### 10.3 Controle
 Você pode limpar cookies e dados locais através das configurações do navegador.
+
+---
+
+## 11. DADOS BIOMÉTRICOS — RECONHECIMENTO FACIAL NO QUIOSQUE
+
+Quando o **modo Quiosque com reconhecimento facial** está ativo, a verificação do
+colaborador no terminal é feita **localmente** (biblioteca `face-api.js` executada
+no navegador do próprio dispositivo). **Não há serviço externo nem operador
+terceiro** — nenhum dado biométrico é enviado a provedores de nuvem.
+
+### 11.1 Dados tratados
+- **Template biométrico facial** (vetor de 128 números derivado da face), gerado no
+  navegador e armazenado **no próprio banco da organização** (`teachers.face_descriptors`).
+  No cadastro guarda-se apenas o vetor — não a imagem da face.
+- **Imagem (frame) da captura** no momento do ponto, guardada para auditoria
+  (sujeita à política de retenção de fotos do sistema).
+- **Metadados da tentativa**: data/hora, dispositivo, IP, nível de confiança e
+  status (sucesso/recusa), em `kiosk_face_logs`.
+
+### 11.2 Base legal e consentimento
+- Execução do contrato de trabalho (registro de jornada — obrigação legal,
+  Portaria MTP 671/2021) e **consentimento específico** para tratamento de dado
+  biométrico (Art. 11 da LGPD), coletado no momento do cadastro facial.
+- O cadastro é realizado pelo administrador (Quiosque → Cadastro Facial).
+
+### 11.3 Segurança e minimização
+- Verificação **1:1**: o colaborador informa o CPF e a face apenas **confirma** a
+  identidade — não há varredura 1:N da base.
+- O template biométrico **não é exposto** a terceiros; trafega do navegador do
+  dispositivo para o servidor da própria organização.
+- Toda tentativa é auditada; o acesso administrativo é controlado.
+
+### 11.4 Residência dos dados
+Todo o processamento e armazenamento ocorre **na infraestrutura da própria
+organização** (navegador do dispositivo + servidor/banco do sistema). **Sem
+transferência internacional** e sem dependência de provedor externo.
+
+### 11.5 Retenção e exclusão
+- O template é mantido enquanto o colaborador estiver ativo e o cadastro vigente.
+- No **desligamento** ou a pedido, o administrador remove a face (botão "Remover
+  cadastro"), que limpa `teachers.face_descriptors`.
+- As imagens de auditoria seguem a política de retenção de fotos (`PHOTO_RETENTION_DAYS`).
+
+### 11.6 Alternativa sem biometria
+O reconhecimento facial é **opcional**. O registro por **CPF + PIN** permanece
+disponível, inclusive como fallback quando a face não confirma.
 
 ---
 

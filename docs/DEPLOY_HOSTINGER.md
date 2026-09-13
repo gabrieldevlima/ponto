@@ -341,7 +341,7 @@ Execute no phpMyAdmin → SQL
 3. Preencha:
    - Nome completo
    - CPF (11 dígitos sem pontos)
-   - PIN de 6 dígitos
+   - CPF (11 dígitos)
    - Email
    - Tipo: Professor
    - Vincule à instituição
@@ -506,6 +506,29 @@ Ou via Gerenciador de Arquivos → Permissões → 755
 
 **Solução:**
 - Certifique-se de estar em **HTTPS** (obrigatório!)
+
+---
+
+## QUIOSQUE FACIAL (reconhecimento local, gratuito)
+
+O modo Quiosque usa reconhecimento facial **local** (`face-api.js` no navegador) —
+**sem API externa, sem chaves, sem custo**. Verificação **1:1**: o colaborador
+informa o CPF e a face confirma.
+
+### Requisitos no servidor
+- **HTTPS obrigatório**: a câmera (`getUserMedia`) só funciona em contexto seguro.
+- Garanta que **`public/js/face-api.min.js`** e a pasta **`public/models/`** foram
+  enviados ao servidor (≈ 8 MB no total) — são a biblioteca e os modelos do reconhecimento.
+- **Não há chaves a configurar.** O segredo HMAC do quiosque (`KIOSK_SIGNING_SECRET`)
+  é gerado e guardado automaticamente em `app_settings` se não for definido.
+
+### Ativação
+1. **Admin → Quiosque → Cadastro Facial**: cadastre as faces (3–5 fotos por colaborador).
+2. **Admin → Quiosque → Dispositivos**: crie um dispositivo e copie o link de pareamento.
+3. **Admin → Quiosque → Configuração**: ative o modo quiosque.
+4. Abra o link de pareamento no terminal e bata o ponto (CPF + rosto).
+
+Documentação completa: `docs/KIOSK_FACE.md`.
 - Permita câmera no navegador
 - Teste em navegador diferente
 
@@ -612,7 +635,7 @@ Ou via Gerenciador de Arquivos → Permissões → 755
 - [ ] Login admin OK
 - [ ] Dashboard carrega
 - [ ] Gráficos aparecem
-- [ ] Registro de ponto funciona (foto + GPS + PIN)
+- [ ] Registro de ponto funciona (foto + GPS + CPF)
 - [ ] Comprovante PDF gera
 - [ ] HLB sincroniza (console)
 - [ ] Calendário exibe feriados

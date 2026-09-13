@@ -1,3 +1,24 @@
+> ⚠️ **DOCUMENTO SUPERADO — NÃO USAR COMO BASE DE DECLARAÇÃO**
+>
+> A auditoria de 2026-08-05 confrontou as afirmações deste arquivo com o
+> código, o schema e o dump de produção. Várias **não se confirmaram**
+> (ver NC-19 em `AUDITORIA_CONFORMIDADE_2026-08-05.md`), entre elas:
+>
+> - `recorded_at` com precisão de milissegundos — a coluna é `datetime`, sem fração;
+> - sincronização com NTP brasileiro — `HLB_NTP_SERVER` nunca era lido; a hora
+>   vinha de `worldtimeapi.org` no navegador (corrigido na Fase 6);
+> - `_tpl_receipt_pdf.php` citado como evidência — o arquivo não existe;
+> - tabela `lgpd_consent` registrando consentimentos — tinha zero linhas
+>   e nenhuma referência no código PHP (corrigido na Fase 7);
+> - triggers de auditoria — o banco de produção não tinha trigger algum.
+>
+> **O estado real e atualizado está em
+> [AUDITORIA_CONFORMIDADE_2026-08-05.md](AUDITORIA_CONFORMIDADE_2026-08-05.md).**
+> Este arquivo é mantido apenas como registro histórico do que se afirmava
+> antes da auditoria.
+
+---
+
 # Implementação Completa - Portaria MTP 671/2021
 
 ## Resumo Executivo
@@ -110,10 +131,9 @@ Sistema **DEEDO Ponto v1.0.0** foi atualizado para conformidade **100%** com a *
    - Indicador visual de status de sincronização
    - Ícones: ✓ (sincronizado), ⚠ (desatualizado), ✗ (offline)
 
-3. **Validação de PIN Offline:**
-   - Cache de PINs válidos em IndexedDB
-   - Validação local quando offline
-   - Bloqueia PINs nunca usados no dispositivo
+3. **Validação de CPF:**
+   - Autenticação por CPF (requer conexão)
+   - CPF não é cacheado localmente (segurança)
    - Mensagens claras ao usuário
 
 4. **Termo de Consentimento LGPD:**
@@ -192,7 +212,7 @@ Sistema **DEEDO Ponto v1.0.0** foi atualizado para conformidade **100%** com a *
 - **Comprovantes:** Geração em PDF ✅
 - **Auditoria:** Log automático ✅
 - **LGPD:** Termo de consentimento ✅
-- **Offline:** Validação de PIN ✅
+- **Offline:** CPF requer conexão (não validado offline)
 
 ---
 
@@ -298,7 +318,7 @@ Sistema **DEEDO Ponto v1.0.0** foi atualizado para conformidade **100%** com a *
 
 ### Dados Protegidos
 
-- PINs: Criptografados com bcrypt (custo 10)
+- CPF: Autenticação sem armazenamento de credenciais adicionais
 - Fotos: Armazenadas em diretório protegido
 - Localização: Precisão controlada
 - Logs: Imutáveis (triggers)

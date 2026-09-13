@@ -85,7 +85,7 @@ O sistema de ponto foi transformado em um **PWA (Progressive Web App) completo**
 
 ### 1️⃣ Registro Offline
 ```
-Usuário tira foto → Confirma com PIN → Sistema detecta offline
+Usuário tira foto → Confirma com CPF → Sistema detecta offline
 → Salva em IndexedDB com timestamp
 → Mostra toast: "Salvo offline - será enviado automaticamente"
 → Registra Background Sync (Chrome/Edge)
@@ -100,7 +100,7 @@ Sistema detecta conexão online
 → Recupera todos os pontos pendentes do IndexedDB
 → Envia em lote via checkin_bulk.php
 → Se sucesso: limpa IndexedDB + toast de sucesso + contador some
-→ Se falha: mantém na fila + notifica erro (ex: PIN inválido)
+→ Se falha: mantém na fila + notifica erro (ex: CPF inválido)
 ```
 
 ### 3️⃣ Sincronização Manual
@@ -145,12 +145,12 @@ Usuário clica no botão "Sincronizar" (com contador)
 6. Clique no botão
 7. ✅ Ícone gira, sincroniza e contador desaparece
 
-### Teste 4: PIN Inválido Offline
+### Teste 4: CPF Inválido Offline
 1. Simule offline
-2. Registre um ponto com PIN errado
+2. Registre um ponto com CPF errado
 3. ✅ Salva offline normalmente
 4. Retorne online
-5. ✅ Tenta sincronizar e mostra erro: "PIN incorreto"
+5. ✅ Tenta sincronizar e mostra erro: "CPF não encontrado"
 6. ✅ Ponto **permanece na fila** para correção
 
 ### Teste 5: Instalação PWA
@@ -225,7 +225,7 @@ Usuário clica no botão "Sincronizar" (com contador)
 
 ### ✅ Mantidas
 - **CSRF token** continua validado no servidor
-- **PIN** sempre validado no servidor
+- **CPF** sempre validado no servidor
 - **Fotos** armazenadas como base64 temporariamente (IndexedDB)
 - **Dados sensíveis** não vão para cache (apenas IndexedDB)
 

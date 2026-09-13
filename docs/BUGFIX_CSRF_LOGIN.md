@@ -76,7 +76,7 @@ $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ??
 ### Teste 1: Login do Colaborador
 ```bash
 1. Acesse: http://localhost/ponto/public/my_login.php
-2. Digite um PIN válido (ex: 123456)
+2. Digite um CPF válido (ex: 111.222.333-44)
 3. Clique em "Acessar"
 4. ✅ Deve fazer login sem erro
 5. ✅ Deve redirecionar para my_timesheet.php

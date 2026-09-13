@@ -93,7 +93,7 @@ Ver: ponto-db → pending ✅
 ```
 1. Simule offline (F12)
 2. Registre 3 pontos diferentes
-   → PIN: 123456 (exemplo)
+   → CPF: 111.222.333-44 (exemplo)
    → Tire fotos diferentes
 3. ✅ Contador deve mostrar "3"
 4. ✅ Badge: "Offline"

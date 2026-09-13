@@ -1,3 +1,36 @@
+> ⛔ **NÃO ASSINE ESTE ATESTADO NO ESTADO ATUAL DO SISTEMA**
+>
+> Este modelo declara conformidade com o Anexo IX da Portaria MTP nº 671/2021
+> e repete afirmações que a auditoria de 2026-08-05 verificou e **não**
+> confirmou (precisão de milissegundos, sincronização com a HLB, entre outras).
+> Assiná-lo hoje seria prestar declaração falsa.
+>
+> **Pendências que ainda impedem a assinatura**, na ordem em que precisam ser
+> resolvidas (ver `AUDITORIA_CONFORMIDADE_2026-08-05.md`):
+>
+> 1. **Leiaute do AFD e do AEJ não homologados.** `AFD_SPEC_VERIFICADA` e
+>    `AEJ_SPEC_VERIFICADA` estão `false`. Conferir campo a campo contra os
+>    Anexos oficiais e validar num validador público.
+> 2. **Cadastro do empregador incompleto.** O CNPJ foi preenchido em
+>    2026-08-07; falta o **identificador do REP** (`employer_config.rep_identifier`),
+>    sem o qual o AFD não é emitido. O local da prestação de serviço também está
+>    em branco (o registro tipo 2 sai incompleto).
+>    *O PIS dos colaboradores deixou de ser pendência por decisão do empregador
+>    (2026-08-07): não existe e não será obtido. Os registros identificam o
+>    trabalhador pelo CPF e o campo PIS sai zerado — confirmar na homologação do
+>    leiaute se esse campo é de preenchimento obrigatório.*
+> 3. **Livro fiscal em `ledger_mode = shadow`.** Precisa passar a `enforced`,
+>    após ~2 semanas de verificação diária da cadeia sem divergência.
+> 4. **Selo diário não ancorado externamente.** A publicação do head ao
+>    empregador é ato operacional e ainda não faz parte da rotina.
+> 5. **Encarregado (DPO) não nomeado** e política de privacidade com
+>    placeholders.
+>
+> Quando esses cinco pontos estiverem resolvidos, `PORTARIA_671_COMPLIANT`
+> pode voltar a `true` em `config.php` e este atestado pode ser preenchido.
+
+---
+
 # Atestado Técnico e Termo de Responsabilidade
 
 ## Conforme Anexo VII da Portaria MTP nº 671/2021
@@ -110,9 +143,9 @@ O sistema **NÃO**:
 7. Relatórios e exportações
 
 ### 5.3 Recursos de Segurança
-- Autenticação por PIN (6 dígitos) com hash bcrypt
+- Autenticação por CPF (11 dígitos)
 - CSRF Protection
-- Validação de PIN offline usando cache local
+- Validação de CPF online (requer conexão)
 - Criptografia de comunicações (HTTPS recomendado)
 - Logs de auditoria imutáveis
 - Backup automático diário
@@ -137,7 +170,7 @@ O sistema **NÃO**:
 
 ### 6.3 Do Colaborador
 - Registrar ponto pessoalmente (não pode delegar)
-- Manter sigilo do PIN pessoal
+- Manter sigilo do CPF (não compartilhar)
 - Verificar comprovante de cada marcação
 - Reportar irregularidades imediatamente
 

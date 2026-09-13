@@ -19,8 +19,8 @@ Sistema de autoatendimento que permite aos colaboradores consultarem sua própri
 ### 1. `public/my_login.php`
 **Login do Colaborador**
 
-- Autenticação por PIN (6 dígitos)
-- Mesmo PIN usado para registrar ponto
+- Autenticação por CPF (11 dígitos)
+- Mesmo CPF usado para registrar ponto
 - Validação de duplicidade
 - Interface responsiva e moderna
 - Links para registro de ponto e área admin
@@ -88,7 +88,7 @@ Adicionado botão **"Minha Folha"** no header:
 ## 🔐 Segurança
 
 ### Autenticação
-- Login por PIN (mesmo usado para registro)
+- Login por CPF (mesmo usado para registro)
 - Sessão PHP segura
 - Validação de colaborador ativo
 - Logout seguro
@@ -167,9 +167,9 @@ Valor = (Total de minutos ÷ 60) × Valor por hora
 
 ### 2. Login
 ```
-1. Digite PIN de 6 dígitos
+1. Digite CPF (11 dígitos)
 2. Clique em "Acessar"
-3. Sistema valida PIN
+3. Sistema valida CPF
 4. Redireciona para my_timesheet.php
 ```
 
@@ -195,7 +195,7 @@ Valor = (Total de minutos ÷ 60) × Valor por hora
 ### Teste 1: Login
 ```
 1. Acesse: http://localhost/ponto/public/my_login.php
-2. Digite PIN de um colaborador (ex: 123456)
+2. Digite CPF de um colaborador (ex: 111.222.333-44)
 3. Clique em "Acessar"
 4. ✅ Deve entrar e mostrar folha de ponto
 ```
@@ -232,10 +232,10 @@ Valor = (Total de minutos ÷ 60) × Valor por hora
 3. ✅ Deve redirecionar para my_login.php
 ```
 
-### Teste 6: PIN Inválido
+### Teste 6: CPF Inválido
 ```
-1. Tente fazer login com PIN errado
-2. ✅ Deve mostrar erro: "PIN incorreto"
+1. Tente fazer login com CPF não cadastrado ou incorreto
+2. ✅ Deve mostrar erro: "CPF não encontrado ou colaborador inativo"
 ```
 
 ---
@@ -348,18 +348,15 @@ $filtro = $_GET['filtro'] ?? 'todos';
 
 ## 🐛 Troubleshooting
 
-### "PIN incorreto" mas PIN está certo
+### "CPF não encontrado" mas CPF está certo
 
 **Verificar:**
-1. PIN no banco tem 6 dígitos?
+1. CPF no cadastro está correto? (Gestão → Colaboradores)
 2. Colaborador está ativo?
-3. Hash do PIN está correto?
+3. CPF digitado sem espaços ou caracteres extras?
 
 **Solução:**
-```sql
--- Resetar PIN (admin deve fazer via interface)
-UPDATE teachers SET pin_hash = ? WHERE id = ?
-```
+- Admin deve conferir o CPF em Gestão → Colaboradores → Editar
 
 ### Nenhum ponto aparece
 
@@ -392,8 +389,8 @@ SELECT * FROM hour_bank_entries WHERE teacher_id = ?;
 
 ### Perguntas Frequentes
 
-**Q: Esqueci meu PIN. O que fazer?**
-A: Contate o RH/Admin para resetar seu PIN.
+**Q: CPF não encontrado ou colaborador inativo. O que fazer?**
+A: Contate o RH/Admin para conferir seu cadastro e CPF.
 
 **Q: Por que meu ponto está "Pendente"?**
 A: Aguardando aprovação do gestor. Motivos comuns:

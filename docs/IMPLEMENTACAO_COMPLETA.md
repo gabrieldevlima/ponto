@@ -50,11 +50,11 @@ Transformamos o sistema DEEDO Ponto em um **PWA completo e offline-first** com:
 ### 2. **Portal do Colaborador** ⭐⭐⭐⭐⭐
 
 **Arquivos:**
-- `public/my_login.php` - Login por PIN
+- `public/my_login.php` - Login por CPF
 - `public/my_timesheet.php` - Folha de ponto mensal
 
 **Funcionalidades:**
-✅ Login seguro por PIN  
+✅ Login seguro por CPF  
 ✅ Consulta mensal de pontos  
 ✅ 4 Cards de estatísticas (horas, aprovados, pendentes, banco)  
 ✅ Cards responsivos (mobile-first)  
@@ -140,7 +140,7 @@ Transformamos o sistema DEEDO Ponto em um **PWA completo e offline-first** com:
 ✅ Sem erros no console  
 
 #### Bug 3: Password field warning
-✅ Campo PIN dentro de `<form>`  
+✅ Campo CPF dentro de `<form>`  
 ✅ Console limpo  
 
 #### Bug 4: Meta tag deprecated
@@ -245,7 +245,7 @@ Captura automática quando OK
   ↓
 Modal de confirmação
   ↓
-Digita PIN
+Digita CPF
   ↓
 Sistema verifica conexão:
   
@@ -292,9 +292,9 @@ Colaborador clica "Minha Folha"
   ↓
 Redireciona para my_login.php
   ↓
-Digita PIN (6 dígitos)
+Digita CPF (6 dígitos)
   ↓
-Sistema valida PIN
+Sistema valida CPF
   ↓
 ✅ Redireciona para my_timesheet.php
   ↓
@@ -429,7 +429,7 @@ Efeitos:
 ## 🔐 Segurança Mantida
 
 ✅ **CSRF Protection** - Tokens em todas as requisições  
-✅ **PIN Criptografado** - Hash bcrypt  
+✅ **CPF** - Autenticação por documento  
 ✅ **Sessões Seguras** - Isolamento colaborador/admin  
 ✅ **Validação Server-side** - Nunca confia no cliente  
 ✅ **Geofencing** - Validação de localização  
@@ -594,7 +594,7 @@ UX negativa offline: ✅
 1. Abra o app (ícone)
 2. Badge mostra "Offline"
 3. Tire foto
-4. Digite PIN
+4. Digite CPF
 5. Registrar
 6. ✅ Tela verde: "Ponto salvo!"
 ```
@@ -603,7 +603,7 @@ UX negativa offline: ✅
 
 ```
 1. Botão "Minha Folha" (roxo)
-2. Digite PIN
+2. Digite CPF
 3. ✅ Vê estatísticas + pontos do mês
 ```
 
@@ -731,7 +731,7 @@ CSRF Protection
 
 ### Para Colaboradores
 
-**Login/PIN:** RH/Admin  
+**Login/CPF:** RH/Admin  
 **Pontos pendentes:** Gestor  
 **Valores:** RH/Financeiro  
 **Técnico:** TI/Admin  
@@ -780,7 +780,7 @@ CSRF Protection
 ✅ **Offline** - Funciona sem internet  
 ✅ **Móvel** - Otimizado para celular  
 ✅ **Rápido** - Cache + Service Worker  
-✅ **Seguro** - CSRF + PIN + Auditoria  
+✅ **Seguro** - CSRF + CPF + Auditoria  
 ✅ **Completo** - Registro + Consulta + Admin  
 ✅ **Documentado** - 200+ páginas  
 ✅ **Testado** - Android + Safari ✅  

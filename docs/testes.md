@@ -16,9 +16,9 @@ Pré-requisitos
 
 Dados de teste sugeridos
 - Colaboradores:
-  - Professor: Nome “Ana Prof”, CPF 11122233344, PIN 123456, Tipo: Professor (classes).
-  - Diretor: Nome “Bruno Diretor”, CPF 22233344455, PIN 234567, Tipo: Diretor (time).
-  - Motorista: Nome “Carlos Motorista”, CPF 33344455566, PIN 345678, Tipo: Motorista (time).
+  - Professor: Nome “Ana Prof”, CPF 111.222.333-44, Tipo: Professor (classes).
+  - Diretor: Nome “Bruno Diretor”, CPF 222.333.444-55, Tipo: Diretor (time).
+  - Motorista: Nome “Carlos Motorista”, CPF 333.444.555-66, Tipo: Motorista (time).
 - Horários (exemplo):
   - Professor (Seg–Sex): classes_count=4, class_minutes=50. Sábado/Domingo: 0.
   - Diretor (Seg–Sex): 08:00–17:00, intervalo 60. Sábado/Domingo: vazio.
@@ -48,23 +48,23 @@ Dados de teste sugeridos
 - [ ] Inativar um motivo e checar se some do select na tela de inserção manual.
 
 5) Cadastro de Colaboradores
-- [ ] Admin > Colaboradores > Novo Colaborador: criar “Ana Prof” (Professor) com PIN 123456.
+- [ ] Admin > Colaboradores > Novo Colaborador: criar “Ana Prof” (Professor) com CPF 111.222.333-44.
 - [ ] Definir rotina por aulas (Seg–Sex: 4 aulas, 50 min).
-- [ ] Criar “Bruno Diretor” (Diretor) com PIN 234567 e rotina time (Seg–Sex: 08:00–17:00, intervalo 60).
-- [ ] Criar “Carlos Motorista” (Motorista) com PIN 345678 e rotina time (ex.: 07:00–11:00, intervalo 15).
-- [ ] Tentar cadastrar PIN repetido: deve bloquear (mensagem de PIN já em uso).
+- [ ] Criar “Bruno Diretor” (Diretor) com CPF 222.333.444-55 e rotina time (Seg–Sex: 08:00–17:00, intervalo 60).
+- [ ] Criar “Carlos Motorista” (Motorista) com CPF 333.444.555-66 e rotina time (ex.: 07:00–11:00, intervalo 15).
+- [ ] Tentar cadastrar CPF repetido: deve bloquear (mensagem de CPF já em uso).
 
 6) Captura de Face (opcional, se usar face descriptors)
 - [ ] Admin > Colaboradores > Ações > “Capturar Face” para “Ana Prof”.
 - [ ] Carregar face-api, capturar 3 amostras e salvar.
 - [ ] Verificar retorno ok (count > 0) e no banco (teachers.face_descriptors preenchido).
 
-7) Check-in público (PIN + Foto + Geo)
+7) Check-in público (CPF + Foto + Geo)
 Pré: abrir /public/index.php
-- [ ] Verificar campos PIN e CPF (CPF opcional), webcam OK, CSRF token presente no HTML.
+- [ ] Verificar campo CPF, webcam OK, CSRF token presente no HTML.
 - [ ] Professor (dia com rotina):
-  - [ ] Informar CPF 11122233344 e PIN 123456, permitir geolocalização, registrar “entrada”.
-  - [ ] Deve retornar status ok, action “entrada”, grava foto em /public/photos, row em attendance com method=pin, approved=1.
+  - [ ] Informar CPF 111.222.333-44, permitir geolocalização, registrar “entrada”.
+  - [ ] Deve retornar status ok, action “entrada”, grava foto em /public/photos, row em attendance com method=cpf, approved=1.
   - [ ] Repetir “entrada” no mesmo dia: deve rejeitar (entrada aberta).
   - [ ] Registrar “saída” (realizar novo envio): deve fechar o mesmo registro (check_out preenchido).
 - [ ] Professor (domingo, sem rotina):
@@ -72,9 +72,9 @@ Pré: abrir /public/index.php
 - [ ] Diretor (dia com rotina time):
   - [ ] Registrar “entrada” e “saída” no mesmo dia: OK.
 - [ ] Colaborador inativo:
-  - [ ] Desativar “Carlos Motorista” e tentar check-in com PIN: deve retornar erro (inativo).
-- [ ] PIN inválido:
-  - [ ] Usar PIN errado: deve rejeitar (401).
+  - [ ] Desativar “Carlos Motorista” e tentar check-in com CPF: deve retornar erro (inativo).
+- [ ] CPF inválido:
+  - [ ] Usar CPF errado: deve rejeitar (401).
 
 8) Inserção Manual de Pontos (Admin)
 Acessar Admin > Inserir Ponto Manual
@@ -116,11 +116,9 @@ Acessar Admin > Inserir Ponto Manual
     - [ ] Justificativa aparece nos dias com ponto manual.
   - [ ] Botão de imprimir/Gerar PDF funciona (renderização ok).
 
-11) Edição e Reset de PIN
+11) Edição de Colaborador
 - [ ] Editar colaborador e trocar tipo (classes <-> time), formulário alterna bloco de rotina corretamente.
-- [ ] Resetar PIN em “Ações”:
-  - [ ] Novo PIN gerado, checar unicidade (não coincide com outro).
-  - [ ] Testar login de check-in com novo PIN (sucesso).
+- [ ] O sistema não possui mais reset de PIN; autenticação é feita por CPF.
 
 12) Menus e Navegação
 - [ ] Navbar/Admin em todas as páginas traz:
@@ -135,8 +133,8 @@ Acessar Admin > Inserir Ponto Manual
 13) API – Sanidade (opcional por Postman/cURL)
 Notas: precisa de CSRF token (capturar via sessão/logado no browser ou desabilitar temporariamente só no ambiente de teste).
 - checkin.php
-  - [ ] POST JSON { pin, cpf, photo(dataURL), geo } → retorna { status: ok, action, time, photo, collaborator/teacher }
-  - [ ] Sem CPF: deve funcionar via varredura de hash (lento com muitos usuários, mas ok em teste).
+  - [ ] POST JSON { cpf, photo(dataURL), geo } → retorna { status: ok, action, time, photo, collaborator/teacher }
+  - [ ] Sem CPF: deve retornar erro cpf_required.
 - save_face.php
   - [ ] POST JSON { teacher_id, descriptors: [[..128floats..], ...] } logado como admin → { status: ok, count }.
 
@@ -145,7 +143,7 @@ Exemplo cURL (com CSRF ilustrativo; usar valor real do meta csrf-token):
 curl -i -X POST http://localhost/ponto/api/checkin.php \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: SEU_TOKEN" \
-  -d '{"pin":"123456","cpf":"11122233344","photo":"data:image/jpeg;base64,/9j/4AAQSk...","geo":{"lat":-23.5,"lng":-46.6,"acc":30}}'
+  -d '{"cpf":"11122233344","photo":"data:image/jpeg;base64,/9j/4AAQSk...","geo":{"lat":-23.5,"lng":-46.6,"acc":30}}'
 ```
 
 14) Integridade de Dados (Banco)
@@ -161,10 +159,10 @@ curl -i -X POST http://localhost/ponto/api/checkin.php \
 - [ ] Colaborador sem rotina (tipo schedule_mode=none): Esperado=0, check-ins permitidos (dependendo de política; hoje só bloqueia quando tipo exige rotina).
 - [ ] Mudar tipo do colaborador (de classes para time): rotina “antiga” permanece na tabela; valida que relatórios passam a usar o novo modo (classes x time).
 - [ ] Apagar motivo “em uso”: FK permite manter ID, mas evite deletar motivos usados (sugestão: desativar ao invés de excluir).
-- [ ] Lentidão sem CPF: com base grande, varrer PIN pode ser lento (recomendação: tornar CPF obrigatório na UI pública para produção).
+- [ ] CPF obrigatório na UI pública para check-in.
 
 Checklist de Aceite (resumo)
-- [ ] Check-in/out via PIN com foto e geo funcionando para Professor e Diretor.
+- [ ] Check-in/out via CPF com foto e geo funcionando para Professor e Diretor.
 - [ ] Bloqueio de “entrada” em dias sem rotina (para tipos que exigem).
 - [ ] Inserção Manual (entrada/saída/both) com motivo obrigatório, “Outro” exige texto.
 - [ ] Registros mostram Justificativa para manuais.

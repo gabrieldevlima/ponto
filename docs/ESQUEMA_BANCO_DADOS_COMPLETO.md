@@ -91,7 +91,6 @@ CREATE TABLE teachers (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
   cpf VARCHAR(14) NOT NULL UNIQUE,
-  pin_hash VARCHAR(255) NOT NULL,
   email VARCHAR(120),
   active TINYINT(1) NOT NULL DEFAULT 1,
   type_id INT NULL,
@@ -175,24 +174,33 @@ CREATE TABLE collaborator_time_schedules (
   weekday TINYINT(1) NOT NULL,
   start_time TIME NULL,
   end_time TIME NULL,
+  end_next_day TINYINT(1) NOT NULL DEFAULT 0, -- 1 = turno noturno (saída no dia seguinte)
   break_minutes INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NULL ON UPDATE CURRENT_TIMESTAMP,
-  
+
   UNIQUE KEY (teacher_id, weekday),
   FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-EXEMPLO:
-teacher_id=2, weekday=1, start_time='08:00', end_time='17:00', break_minutes=60
+EXEMPLOS:
+teacher_id=2, weekday=1, start_time='08:00', end_time='17:00', end_next_day=0, break_minutes=60
 = Coordenador trabalha 8h-17h com 1h de intervalo
+
+teacher_id=7, weekday=1, start_time='18:00', end_time='06:00', end_next_day=1, break_minutes=0
+= Vigilante trabalha 18h da segunda até 06h da terça (turno noturno de 12h)
 
 ÍNDICES:
 - PRIMARY KEY (id)
 - UNIQUE KEY (teacher_id, weekday)
 ```
 
-**Uso:** Para colaboradores com horário fixo (coordenadores, administrativos)
+**Uso:** Para colaboradores com horário fixo (coordenadores, administrativos, vigilantes).
+
+**Turnos noturnos:** quando `end_next_day = 1`, a saída se refere ao dia seguinte ao da entrada.
+A função `compute_schedule_window($ts, $date)` em `helpers.php` é a forma canônica de obter o
+intervalo `DateTime` completo (já com `+1 day` aplicado quando necessário). Suporta também turno
+de 24h (start == end com `end_next_day=1`).
 
 ---
 
@@ -291,7 +299,7 @@ CREATE TABLE attendance (
   check_out_acc DOUBLE NULL,
   
   -- MÉTODO E ORIGEM
-  method VARCHAR(50) NULL DEFAULT 'pin',
+  method VARCHAR(50) NULL DEFAULT 'cpf',
   ip VARCHAR(45) NULL,
   user_agent TEXT NULL,
   photo VARCHAR(255) NULL,
