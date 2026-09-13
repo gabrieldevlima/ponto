@@ -115,32 +115,18 @@ BEGIN
         SET MESSAGE_TEXT = 'Colaborador não encontrado';
     END IF;
     
-    -- TODO: Calcular horas trabalhadas e esperadas do mês
-    -- Por enquanto, valores exemplo (deve ser substituído por lógica real)
-    SET v_worked_minutes = 9600;  -- 160 horas
-    SET v_expected_minutes = 9600; -- 160 horas
-    
-    -- Calcula extras e déficit
-    IF v_worked_minutes > v_expected_minutes THEN
-        SET v_overtime_minutes = v_worked_minutes - v_expected_minutes;
-        SET v_deficit_minutes = 0;
-    ELSE
-        SET v_overtime_minutes = 0;
-        SET v_deficit_minutes = v_expected_minutes - v_worked_minutes;
-    END IF;
-    
-    -- Valor por minuto
-    IF v_expected_minutes > 0 THEN
-        SET v_minute_value = v_base_salary / v_expected_minutes;
-    ELSE
-        SET v_minute_value = 0;
-    END IF;
-    
-    -- Calcula valores
-    SET v_overtime_value = ROUND(v_overtime_minutes * v_minute_value * 1.5, 2); -- 50% adicional
-    SET v_discount_value = ROUND(v_deficit_minutes * v_minute_value, 2);
-    SET v_gross_total = v_base_salary + v_overtime_value;
-    SET v_net_total = v_gross_total - v_discount_value;
+    -- A instituição NÃO paga hora extra nem desconta déficit automaticamente.
+    -- O holerite considera apenas o salário base; horas extras/déficit ficam zerados.
+    -- Horas trabalhadas/esperadas são informativas e não são calculadas aqui.
+    SET v_worked_minutes = 0;
+    SET v_expected_minutes = 0;
+    SET v_overtime_minutes = 0;
+    SET v_deficit_minutes = 0;
+    SET v_minute_value = 0;
+    SET v_overtime_value = 0;
+    SET v_discount_value = 0;
+    SET v_gross_total = v_base_salary;
+    SET v_net_total = v_base_salary;
     
     -- Insere ou atualiza holerite
     INSERT INTO payslips (

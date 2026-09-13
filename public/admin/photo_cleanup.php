@@ -96,6 +96,7 @@ $recentDeletions = $pdo->query("
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="<?= esc(csrf_token()) ?>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/admin.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
     <link rel="shortcut icon" href="../img/icone-2.ico" type="image/x-icon">
     <link rel="icon" href="../img/icone-2.ico" type="image/x-icon">
@@ -104,11 +105,14 @@ $recentDeletions = $pdo->query("
 
 <?php include '_navbar.php'; ?>
 
-<div class="container-fluid mt-4">
-    <div class="row mb-4">
-        <div class="col">
-            <h2><i class="bi bi-images"></i> Gerenciamento de Fotos</h2>
-            <p class="text-muted">Controle de armazenamento e limpeza automática de fotos</p>
+<div class="container-fluid admin-content mt-4">
+    <div class="app-page-header">
+        <div class="app-page-header__main">
+            <div class="app-page-icon"><i class="bi bi-images"></i></div>
+            <div>
+                <h1 class="app-page-title">Gerenciamento de Fotos</h1>
+                <p class="app-page-subtitle">Controle de armazenamento e limpeza automática de fotos.</p>
+            </div>
         </div>
     </div>
 
@@ -195,11 +199,12 @@ $recentDeletions = $pdo->query("
     <!-- Configurações e Ações -->
     <div class="row g-3 mb-4">
         <div class="col-lg-6">
-            <div class="card">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-gear"></i> Configurações Atuais</h5>
-                </div>
-                <div class="card-body">
+            <section class="app-section-card">
+                <header class="app-section-card__header">
+                    <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-gear"></i>Config</span>
+                    <h2 class="app-section-card__title">Configurações Atuais</h2>
+                </header>
+                <div class="app-section-card__body">
                     <table class="table table-sm mb-0">
                         <tbody>
                             <tr>
@@ -235,18 +240,19 @@ $recentDeletions = $pdo->query("
                         </small>
                     </div>
                 </div>
-            </div>
+            </section>
         </div>
 
         <div class="col-lg-6">
-            <div class="card">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-play-circle"></i> Executar Limpeza Manual</h5>
-                </div>
-                <div class="card-body">
+            <section class="app-section-card">
+                <header class="app-section-card__header">
+                    <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-play-circle"></i>Execução</span>
+                    <h2 class="app-section-card__title">Executar Limpeza Manual</h2>
+                </header>
+                <div class="app-section-card__body">
                     <p class="mb-3">Execute a limpeza manualmente para liberar espaço imediatamente.</p>
                     
-                    <form method="post">
+                    <form action="" method="post">
                         <input type="hidden" name="csrf" value="<?= esc(csrf_token()) ?>">
                         <input type="hidden" name="action" value="cleanup_now">
                         
@@ -280,16 +286,17 @@ $recentDeletions = $pdo->query("
                         </div>
                     <?php endif; ?>
                 </div>
-            </div>
+            </section>
         </div>
     </div>
 
     <!-- Histórico de Exclusões -->
-    <div class="card">
-        <div class="card-header bg-light">
-            <h5 class="mb-0"><i class="bi bi-clock-history"></i> Histórico de Exclusões (Últimas 20)</h5>
-        </div>
-        <div class="card-body">
+    <section class="app-section-card app-table-card">
+        <header class="app-section-card__header">
+            <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-clock-history"></i>Histórico</span>
+            <h2 class="app-section-card__title">Últimas 20 Exclusões</h2>
+        </header>
+        <div class="app-section-card__body">
             <?php if (empty($recentDeletions)): ?>
                 <p class="text-muted mb-0">Nenhuma foto foi deletada automaticamente ainda.</p>
             <?php else: ?>
@@ -297,10 +304,10 @@ $recentDeletions = $pdo->query("
                     <table class="table table-sm table-hover">
                         <thead class="table-light">
                             <tr>
-                                <th>Colaborador</th>
-                                <th>Data do Registro</th>
-                                <th>Arquivo</th>
-                                <th>Deletada Em</th>
+                                <th scope="col">Colaborador</th>
+                                <th scope="col">Data do Registro</th>
+                                <th scope="col">Arquivo</th>
+                                <th scope="col">Deletada Em</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -317,14 +324,15 @@ $recentDeletions = $pdo->query("
                 </div>
             <?php endif; ?>
         </div>
-    </div>
+    </section>
 
     <!-- Dicas -->
-    <div class="card mt-4 mb-4 border-info">
-        <div class="card-header bg-info text-white">
-            <h5 class="mb-0"><i class="bi bi-lightbulb"></i> Dicas de Gerenciamento</h5>
-        </div>
-        <div class="card-body">
+    <section class="app-section-card mt-4">
+        <header class="app-section-card__header">
+            <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-lightbulb"></i>Dicas</span>
+            <h2 class="app-section-card__title">Gerenciamento</h2>
+        </header>
+        <div class="app-section-card__body">
             <ul class="mb-0">
                 <li><strong>Conformidade Legal:</strong> Para atender a Portaria MTP 671/2021, configure retenção de <strong>1825 dias (5 anos)</strong>.</li>
                 <li><strong>Economia Agressiva:</strong> Para ambientes com pouco armazenamento, use <strong>30 dias</strong> de retenção.</li>
@@ -338,10 +346,11 @@ $recentDeletions = $pdo->query("
                 </li>
             </ul>
         </div>
-    </div>
+    </section>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <?php include __DIR__ . '/../_footer.php'; ?>
 </body>
 </html>
 

@@ -21,6 +21,7 @@ if (php_sapi_name() !== 'cli') {
 
 // Carrega configurações
 require_once __DIR__ . '/config.php';
+$pdo = db(); // config.php expõe db(), não uma variável global $pdo
 
 echo "[" . date('Y-m-d H:i:s') . "] Iniciando limpeza de fotos antigas...\n";
 
@@ -38,6 +39,14 @@ try {
     } else {
         echo "[" . date('Y-m-d H:i:s') . "] ✗ Função cleanup_old_photos() não encontrada\n";
         echo "  Verifique se está definida em helpers.php\n";
+    }
+
+    // Purga das imagens de auditoria do quiosque (LGPD) — não toca em fotos
+    // ainda referenciadas por attendance (retenção legal própria).
+    if (function_exists('kiosk_purge_audit_photos')) {
+        $ks = kiosk_purge_audit_photos($pdo);
+        echo "[" . date('Y-m-d H:i:s') . "] Quiosque: " . (int)($ks['deleted'] ?? 0)
+            . " imagem(ns) de auditoria removida(s) (" . ($ks['freed_mb'] ?? 0) . " MB).\n";
     }
 } catch (Throwable $e) {
     echo "[" . date('Y-m-d H:i:s') . "] ✗ ERRO: " . $e->getMessage() . "\n";

@@ -23,6 +23,20 @@ $monthName = [
     9 => 'Setembro', 10 => 'Outubro', 11 => 'Novembro', 12 => 'Dezembro'
 ][(int)$refMonth->format('n')];
 $year = $refMonth->format('Y');
+
+// A instituição não paga hora extra nem desconta déficit automaticamente.
+// Os totais consideram salário base + itens manuais (proventos/descontos), se houver.
+$manualEarnings = 0.0;
+$manualDeductions = 0.0;
+if (isset($items) && is_array($items)) {
+    foreach ($items as $it) {
+        if (($it['type'] ?? '') === 'earning')      $manualEarnings   += (float)$it['value'];
+        elseif (($it['type'] ?? '') === 'deduction') $manualDeductions += (float)$it['value'];
+    }
+}
+$grossTotal      = (float)$payslip['base_salary'] + $manualEarnings;
+$totalDeductions = $manualDeductions;
+$netTotal        = $grossTotal - $totalDeductions;
 ?>
 <!DOCTYPE html>
 <html>
@@ -140,15 +154,6 @@ $year = $refMonth->format('Y');
                 <td>Salário Base</td>
                 <td class="text-right"><?= money($payslip['base_salary']) ?></td>
             </tr>
-            <?php if ($payslip['overtime_minutes'] > 0): ?>
-            <tr>
-                <td>
-                    Horas Extras (<?= mins_to_time((int)$payslip['overtime_minutes']) ?>)
-                    <div style="font-size: 9px; color: #6c757d;">Adicional de 50%</div>
-                </td>
-                <td class="text-right text-success"><?= money($payslip['overtime_value']) ?></td>
-            </tr>
-            <?php endif; ?>
             <?php if (isset($items)): ?>
                 <?php foreach ($items as $item): ?>
                     <?php if ($item['type'] === 'earning'): ?>
@@ -161,7 +166,7 @@ $year = $refMonth->format('Y');
             <?php endif; ?>
             <tr class="total-row">
                 <td>TOTAL DE PROVENTOS</td>
-                <td class="text-right"><?= money($payslip['gross_total']) ?></td>
+                <td class="text-right"><?= money($grossTotal) ?></td>
             </tr>
         </tbody>
     </table>
@@ -175,15 +180,6 @@ $year = $refMonth->format('Y');
             </tr>
         </thead>
         <tbody>
-            <?php if ($payslip['deficit_minutes'] > 0): ?>
-            <tr>
-                <td>
-                    Déficit de Horas (<?= mins_to_time((int)$payslip['deficit_minutes']) ?>)
-                    <div style="font-size: 9px; color: #6c757d;">Desconto proporcional</div>
-                </td>
-                <td class="text-right text-danger"><?= money($payslip['discount_value']) ?></td>
-            </tr>
-            <?php endif; ?>
             <?php if (isset($items)): ?>
                 <?php foreach ($items as $item): ?>
                     <?php if ($item['type'] === 'deduction'): ?>
@@ -194,14 +190,14 @@ $year = $refMonth->format('Y');
                     <?php endif; ?>
                 <?php endforeach; ?>
             <?php endif; ?>
-            <?php if ($payslip['deficit_minutes'] == 0 && (!isset($items) || empty(array_filter($items, fn($i) => $i['type'] === 'deduction')))): ?>
+            <?php if (!isset($items) || empty(array_filter($items, fn($i) => $i['type'] === 'deduction'))): ?>
             <tr>
                 <td colspan="2" class="text-center text-muted">Nenhum desconto</td>
             </tr>
             <?php endif; ?>
             <tr class="total-row">
                 <td>TOTAL DE DESCONTOS</td>
-                <td class="text-right"><?= money($payslip['discount_value']) ?></td>
+                <td class="text-right"><?= money($totalDeductions) ?></td>
             </tr>
         </tbody>
     </table>
@@ -209,20 +205,14 @@ $year = $refMonth->format('Y');
     <table>
         <tr class="net-total-row">
             <td>LÍQUIDO A RECEBER</td>
-            <td style="width: 120px;" class="text-right"><?= money($payslip['net_total']) ?></td>
+            <td style="width: 120px;" class="text-right"><?= money($netTotal) ?></td>
         </tr>
     </table>
 
     <div class="info-box">
-        <div class="label" style="margin-bottom: 5px;">Resumo de Horas:</div>
+        <div class="label" style="margin-bottom: 5px;">Resumo de Horas (informativo):</div>
         <div>Horas Esperadas: <?= mins_to_time((int)$payslip['expected_minutes']) ?></div>
         <div>Horas Trabalhadas: <?= mins_to_time((int)$payslip['worked_minutes']) ?></div>
-        <?php if ($payslip['overtime_minutes'] > 0): ?>
-            <div class="text-success">Extras: +<?= mins_to_time((int)$payslip['overtime_minutes']) ?></div>
-        <?php endif; ?>
-        <?php if ($payslip['deficit_minutes'] > 0): ?>
-            <div class="text-danger">Déficit: -<?= mins_to_time((int)$payslip['deficit_minutes']) ?></div>
-        <?php endif; ?>
     </div>
 
     <?php if (!empty($payslip['notes'])): ?>
@@ -246,7 +236,7 @@ $year = $refMonth->format('Y');
             <img src="<?= $logoBase64 ?>" alt="Prefeitura" style="height: 90px; width: auto;">
         </div>
         <?php endif; ?>
-        Prefeitura Municipal de Ribeira do Piauí - PI<br>
+        Prefeitura Municipal de Oeiras - PI<br>
         DEEDO Ponto v1.0.0 - Sistema de Gestão de Ponto Eletrônico<br>
         Documento gerado em <?= date('d/m/Y H:i:s') ?><br>
         Este holerite é apenas informativo e não substitui documentos oficiais da folha de pagamento.

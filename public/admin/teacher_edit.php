@@ -9,10 +9,15 @@ if ($id) {
   $stmt = $pdo->prepare("SELECT * FROM teachers WHERE id = ?");
   $stmt->execute([$id]);
   $teacher = $stmt->fetch();
-  if (!$teacher) die('Colaborador não encontrado.');
+  if (!$teacher) flash_redirect('error', 'Colaborador não encontrado.', 'teachers.php');
 } else {
   $teacher = null;
 }
+$faceNotice = null;
+if (!empty($_SESSION['teacher_face_notice']) && is_array($_SESSION['teacher_face_notice'])) {
+  $faceNotice = $_SESSION['teacher_face_notice'];
+}
+unset($_SESSION['teacher_face_notice']);
 
 // Carregar tipos de colaboradores
 $types = $pdo->query("SELECT id, name, schedule_mode FROM collaborator_types ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
@@ -56,6 +61,16 @@ if ($id) {
   }
 }
 
+// Carregar rotina semanal por horas/dia (modo hours — motorista, monitor)
+$hoursSchedules = [];
+if ($id) {
+  $stmt = $pdo->prepare("SELECT * FROM collaborator_hours_schedules WHERE teacher_id = ?");
+  $stmt->execute([$id]);
+  foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $hs) {
+    $hoursSchedules[(int)$hs['weekday']] = $hs;
+  }
+}
+
 // Carregar atribuições de períodos de aula (grade horária)
 $periodAssignments = [];
 if ($id) {
@@ -87,13 +102,14 @@ $allPeriods = get_class_periods();
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+  <link rel="stylesheet" href="css/admin.css">
   <link rel="shortcut icon" href="../img/icone-2.ico" type="image/x-icon">
   <link rel="icon" href="../img/icone-2.ico" type="image/x-icon">
 </head>
 
 <body>
   <?php include __DIR__ . '/_navbar.php'; ?>
-  <div class="container-fluid mb-5">
+  <div class="container-fluid admin-content mb-5">
     <div class="card shadow-sm border-0">
       <div class="card-body">
         <div class="d-flex align-items-center justify-content-between p-3 mb-4 rounded-3 shadow-sm">
@@ -112,6 +128,45 @@ $allPeriods = get_class_periods();
             </div>
           </div>
         </div>
+        <?php if ($faceNotice && ($faceNotice['type'] ?? '') === 'face_duplicate_active'): ?>
+          <div class="alert alert-warning border border-warning-subtle shadow-sm d-flex align-items-start gap-3 mb-4 alert-dismissible fade show" role="alert">
+            <div class="rounded-circle bg-warning-subtle text-warning d-flex align-items-center justify-content-center" style="width:40px;height:40px;min-width:40px;">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+            </div>
+            <div class="flex-grow-1">
+              <div class="fw-semibold mb-1"><?= esc((string)($faceNotice['title'] ?? 'Biometria já cadastrada')) ?></div>
+              <div class="small text-muted mb-2"><?= esc((string)($faceNotice['message'] ?? 'Identificamos dados faciais já vinculados a outro cadastro ativo.')) ?></div>
+              <button type="button" class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#faceDuplicateModal">
+                Ver aviso completo
+              </button>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Fechar"></button>
+          </div>
+
+          <div class="modal fade" id="faceDuplicateModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+              <div class="modal-content border-0 shadow">
+                <div class="modal-header bg-warning-subtle">
+                  <h5 class="modal-title d-flex align-items-center gap-2">
+                    <i class="bi bi-shield-exclamation text-warning"></i>
+                    <?= esc((string)($faceNotice['title'] ?? 'Biometria já cadastrada')) ?>
+                  </h5>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                  <p class="mb-2"><?= esc((string)($faceNotice['message'] ?? 'Identificamos dados faciais já vinculados a outro cadastro ativo.')) ?></p>
+                  <div class="small text-muted"><?= esc((string)($faceNotice['details'] ?? 'Revise os dados e tente novamente.')) ?></div>
+                  <div class="mt-3 p-3 rounded bg-light small">
+                    <strong>Importante:</strong> por privacidade, o sistema não exibe dados da pessoa já vinculada.
+                  </div>
+                </div>
+                <div class="modal-footer">
+                  <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Fechar e continuar</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        <?php endif; ?>
 
         <?php
         if (session_status() !== PHP_SESSION_ACTIVE) {
@@ -121,36 +176,101 @@ $allPeriods = get_class_periods();
           $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
         }
         $csrf = $_SESSION['csrf_token'];
+
+        // Idempotency token: regerado a cada render do form. Marcado como consumido
+        // após o save bem-sucedido. Se o usuário der refresh ou voltar e re-enviar,
+        // o teachers_save.php detecta e bloqueia com mensagem amigável.
+        $idempotencyToken = bin2hex(random_bytes(16));
+
+        // Lê flash do save anterior (se houve erro ou warning)
+        $saveFlash = null;
+        $saveEcho = [];
+        if (!empty($_SESSION['teacher_save_flash']) && is_array($_SESSION['teacher_save_flash'])) {
+          $saveFlash = $_SESSION['teacher_save_flash'];
+          $saveEcho  = is_array($saveFlash['echo'] ?? null) ? $saveFlash['echo'] : [];
+          unset($_SESSION['teacher_save_flash']);
+        }
+        $echoVal = function (string $key, $default = '') use ($saveEcho) {
+          return $saveEcho[$key] ?? $default;
+        };
         ?>
+
+        <?php if ($saveFlash): ?>
+          <?php
+            $alertClass = match ($saveFlash['type']) {
+              'error'   => 'alert-danger',
+              'warning' => 'alert-warning',
+              default   => 'alert-info',
+            };
+            $alertIcon = match ($saveFlash['type']) {
+              'error'   => 'bi-x-circle-fill',
+              'warning' => 'bi-exclamation-triangle-fill',
+              default   => 'bi-info-circle-fill',
+            };
+          ?>
+          <div class="alert <?= esc($alertClass) ?> d-flex gap-2 align-items-start mb-4" role="alert">
+            <i class="bi <?= esc($alertIcon) ?> fs-5 mt-1"></i>
+            <div class="flex-grow-1">
+              <strong><?= esc($saveFlash['title'] ?? 'Aviso') ?></strong>
+              <div><?= esc($saveFlash['message'] ?? '') ?></div>
+              <?php if (!empty($saveFlash['details'])): ?>
+                <div class="small mt-1 text-muted"><?= esc($saveFlash['details']) ?></div>
+              <?php endif; ?>
+              <?php if (($saveFlash['type'] ?? '') === 'warning'
+                && stripos((string)($saveFlash['message'] ?? ''), 'inativo') !== false): ?>
+                <!-- Opção de reativar cadastro inativo -->
+                <div class="form-check mt-2">
+                  <input class="form-check-input" type="checkbox" id="reactivate_existing_chk" name="reactivate_existing" value="1" form="teacherForm">
+                  <label class="form-check-label fw-semibold" for="reactivate_existing_chk">
+                    Reativar o cadastro existente (em vez de criar um novo)
+                  </label>
+                </div>
+              <?php elseif (($saveFlash['type'] ?? '') === 'warning'
+                && stripos((string)($saveFlash['message'] ?? ''), 'similar') !== false): ?>
+                <!-- Opção de forçar criação mesmo com nome duplicado -->
+                <div class="form-check mt-2">
+                  <input class="form-check-input" type="checkbox" id="force_create_chk" name="force_create_duplicate_name" value="1" form="teacherForm">
+                  <label class="form-check-label fw-semibold" for="force_create_chk">
+                    Confirmar cadastro mesmo com nome igual (homônimo legítimo)
+                  </label>
+                </div>
+              <?php endif; ?>
+            </div>
+          </div>
+        <?php endif; ?>
 
         <form id="teacherForm" method="post" action="teachers_save.php" autocomplete="off" spellcheck="false">
           <input type="hidden" name="id" value="<?= esc($id) ?>">
           <input type="hidden" name="_csrf" value="<?= esc($csrf) ?>">
+          <input type="hidden" name="_idempotency" value="<?= esc($idempotencyToken) ?>">
 
-          <div class="card mb-4">
-            <div class="card-header"><strong>Dados do colaborador(a)</strong></div>
-            <div class="card-body">
+          <section class="app-section-card">
+            <header class="app-section-card__header">
+              <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-person-badge"></i>Seção 1</span>
+              <h2 class="app-section-card__title">Dados do colaborador</h2>
+            </header>
+            <div class="app-section-card__body admin-form-section">
               <div class="row g-3">
-                <div class="col-lg-6">
-                  <label class="form-label" for="name">Nome</label>
+                <div class="col-12 col-lg-6">
+                  <label class="form-label" for="name">Nome <span class="text-danger">*</span></label>
                   <input type="text" class="form-control" id="name" name="name" required maxlength="120" autocomplete="name" placeholder="Nome completo" autofocus value="<?= esc($teacher['name'] ?? '') ?>">
                 </div>
-                <div class="col-md-3">
-                  <label class="form-label" for="cpf_display">CPF</label>
-                  <input type="text" class="form-control" id="cpf_display" name="_cpf_display" required maxlength="14" inputmode="numeric" placeholder="000.000.000-00" pattern="\d{3}\.\d{3}\.\d{3}-\d{2}" title="Formato: 000.000.000-00" value="<?= esc($teacher['cpf'] ?? '') ?>" <?= $id ? 'readonly' : '' ?>>
+                <div class="col-12 col-md-3">
+                  <label class="form-label" for="cpf_display">CPF <span class="text-danger">*</span></label>
+                  <input type="text" class="form-control" id="cpf_display" name="_cpf_display" required maxlength="14" inputmode="numeric" placeholder="000.000.000-00" pattern="\d{3}\.\d{3}\.\d{3}-\d{2}" title="Formato: 000.000.000-00" value="<?= esc($teacher['cpf'] ?? '') ?>">
                   <input type="hidden" id="cpf" name="cpf" value="<?= esc($teacher['cpf'] ?? '') ?>">
                 </div>
-                <div class="col-lg-3 col-md-6">
+                <div class="col-12 col-lg-3 col-md-6">
                   <label class="form-label" for="email">E-mail</label>
                   <input type="email" class="form-control" id="email" name="email" maxlength="120" autocomplete="email" placeholder="email@exemplo.com" value="<?= esc($teacher['email'] ?? '') ?>">
                 </div>
               </div>
 
               <div class="row g-3 mt-1">
-                <div class="col-md-4">
-                  <label class="form-label" for="type_id">Tipo</label>
+                <div class="col-12 col-md-4">
+                  <label class="form-label" for="type_id">Tipo <span class="text-danger">*</span></label>
                   <select class="form-select" name="type_id" id="type_id" required>
-                    <option value="">Selecione</option>
+                    <option value="" data-mode="time">Selecione</option>
                     <?php foreach ($types as $t): ?>
                       <option value="<?= (int)$t['id'] ?>" data-mode="<?= esc($t['schedule_mode']) ?>" <?= isset($teacher['type_id']) && (int)$teacher['type_id'] === (int)$t['id'] ? 'selected' : '' ?>>
                         <?= esc($t['name']) ?>
@@ -159,32 +279,11 @@ $allPeriods = get_class_periods();
                   </select>
                 </div>
 
-                <?php if (!$id): ?>
-                  <?php
-                  // Gera um PIN único de 6 dígitos
-                  $pinGenerated = null;
-                  $tries = 0;
-                  do {
-                    $pinGenerated = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-                    $stPin = $pdo->prepare("SELECT 1 FROM teachers WHERE pin_hash = ? LIMIT 1");
-                    $stPin->execute([$pinGenerated]);
-                    $exists = (bool)$stPin->fetchColumn();
-                    $tries++;
-                  } while ($exists && $tries < 50);
-                  ?>
-                  <div class="col-md-4">
-                    <label class="form-label" for="pin_display">PIN (gerado automaticamente)</label>
-                    <input type="text" class="form-control" id="pin_display" value="<?= esc($pinGenerated ?? '') ?>" readonly>
-                    <input type="hidden" id="pin" name="pin" value="<?= esc($pinGenerated ?? '') ?>">
-                    <div class="form-text">PIN de 6 dígitos gerado automaticamente e único.</div>
-                  </div>
-                <?php endif; ?>
-
-                <div class="col-md-4">
+                <div class="col-12 col-md-4">
                   <label class="form-label" for="base_salary">Salário base</label>
                   <div class="input-group">
                     <span class="input-group-text">R$</span>
-                    <input type="number" step="0.01" min="0" class="form-control" id="base_salary" name="base_salary" value="<?= esc($teacher['base_salary'] ?? '0.00') ?>" required>
+                    <input type="number" step="0.01" min="0" inputmode="decimal" class="form-control" id="base_salary" name="base_salary" value="<?= esc($teacher['base_salary'] ?? '0.00') ?>" required>
                   </div>
                 </div>
 
@@ -199,42 +298,82 @@ $allPeriods = get_class_periods();
                 }
                 ?>
                 <?php if ($hasHourlyRate): ?>
-                <div class="col-md-4">
+                <div class="col-12 col-md-4">
                   <label class="form-label" for="hourly_rate">
                     Valor/Hora
                     <i class="bi bi-info-circle text-muted" data-bs-toggle="tooltip" title="Valor por hora para cálculo estimado na folha de ponto"></i>
                   </label>
                   <div class="input-group">
                     <span class="input-group-text">R$</span>
-                    <input type="number" step="0.01" min="0" class="form-control" id="hourly_rate" name="hourly_rate" value="<?= esc($teacher['hourly_rate'] ?? '') ?>" placeholder="0.00">
+                    <input type="number" step="0.01" min="0" inputmode="decimal" class="form-control" id="hourly_rate" name="hourly_rate" value="<?= esc($teacher['hourly_rate'] ?? '') ?>" placeholder="0.00">
                   </div>
                   <div class="form-text">Opcional: para mostrar valor estimado na consulta</div>
                 </div>
                 <?php endif; ?>
               </div>
-            </div>
-          </div>
 
-          <div class="card mb-4">
-            <div class="card-header d-flex align-items-center justify-content-between">
-              <strong>Vinculação às escolas</strong>
-              <small class="text-muted">Defina onde o(a) colaborador(a) pode registrar ponto</small>
+              <hr class="my-4">
+              <h6 class="text-muted d-flex align-items-center gap-2 mb-3">
+                <i class="bi bi-file-earmark-ruled"></i>
+                Dados contratuais
+                <span class="badge bg-warning text-dark">Exigidos pelo AFD/AEJ</span>
+              </h6>
+              <div class="row g-3">
+                <div class="col-12 col-md-4">
+                  <label class="form-label" for="pis">PIS / PASEP / NIT</label>
+                  <input type="text" class="form-control" id="pis" name="pis" maxlength="14" inputmode="numeric" placeholder="000.00000.00-0" value="<?= esc($echoVal('pis', $teacher['pis'] ?? '')) ?>">
+                  <div class="form-text">O AEJ identifica o trabalhador pelo PIS, não pelo CPF.</div>
+                </div>
+                <div class="col-12 col-md-4">
+                  <label class="form-label" for="matricula">Matrícula</label>
+                  <input type="text" class="form-control" id="matricula" name="matricula" maxlength="20" value="<?= esc($echoVal('matricula', $teacher['matricula'] ?? '')) ?>">
+                </div>
+                <div class="col-12 col-md-4">
+                  <label class="form-label" for="cbo">CBO</label>
+                  <input type="text" class="form-control" id="cbo" name="cbo" maxlength="6" inputmode="numeric" placeholder="000000" value="<?= esc($echoVal('cbo', $teacher['cbo'] ?? '')) ?>">
+                  <div class="form-text">Classificação Brasileira de Ocupações.</div>
+                </div>
+                <div class="col-12 col-md-4">
+                  <label class="form-label" for="admission_date">Data de admissão</label>
+                  <input type="date" class="form-control" id="admission_date" name="admission_date" value="<?= esc($echoVal('admission_date', $teacher['admission_date'] ?? '')) ?>">
+                </div>
+                <div class="col-12 col-md-4">
+                  <label class="form-label" for="dismissal_date">Data de desligamento</label>
+                  <input type="date" class="form-control" id="dismissal_date" name="dismissal_date" value="<?= esc($echoVal('dismissal_date', $teacher['dismissal_date'] ?? '')) ?>">
+                  <div class="form-text">Deixe em branco se o vínculo está ativo.</div>
+                </div>
+              </div>
             </div>
-            <div class="card-body">
-              <div class="row g-4 align-items-start">
-                <div class="col-lg-7">
-                  <label class="form-label" for="schools">Escolas onde atua</label>
+          </section>
 
-                  <div class="d-flex flex-wrap gap-2 mb-2">
-                    <div class="input-group" style="max-width: 360px;">
-                      <span class="input-group-text"><i class="bi bi-search"></i></span>
-                      <input type="text" class="form-control" id="schoolSearch" placeholder="Filtrar por nome da escola...">
+          <section class="app-section-card">
+            <header class="app-section-card__header">
+              <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-building"></i>Seção 2</span>
+              <h2 class="app-section-card__title">Vinculação às instituições</h2>
+              <span class="app-section-card__hint">Onde o(a) colaborador(a) pode registrar ponto</span>
+            </header>
+            <div class="app-section-card__body admin-form-section">
+              <div class="row g-4 align-items-stretch">
+                <div class="col-12">
+                  <label class="form-label" for="schools">Instituições onde atua</label>
+
+                  <div class="border rounded-3 p-3 mb-3 bg-body-tertiary">
+                    <div class="row g-2 align-items-center">
+                      <div class="col-12 col-md-8">
+                        <div class="input-group">
+                          <span class="input-group-text"><i class="bi bi-search"></i></span>
+                          <input type="text" class="form-control" id="schoolSearch" placeholder="Filtrar por nome da instituição...">
+                        </div>
+                      </div>
+                      <div class="col-12 col-md-4">
+                        <div class="form-check form-switch d-flex align-items-center h-100 justify-content-md-end">
+                          <input class="form-check-input" type="checkbox" id="only_selected_toggle">
+                          <label class="form-check-label ms-2" for="only_selected_toggle">Somente selecionadas</label>
+                        </div>
+                      </div>
                     </div>
-                    <div class="form-check form-switch d-flex align-items-center">
-                      <input class="form-check-input" type="checkbox" id="only_selected_toggle">
-                      <label class="form-check-label ms-1" for="only_selected_toggle">Somente selecionadas</label>
-                    </div>
-                    <div class="ms-auto d-flex flex-wrap gap-2">
+
+                    <div class="d-flex flex-wrap gap-2 mt-3">
                       <button type="button" class="btn btn-outline-secondary btn-sm" data-schools-action="all">
                         <i class="bi bi-check2-all"></i> Selecionar todas
                       </button>
@@ -247,11 +386,31 @@ $allPeriods = get_class_periods();
                     </div>
                   </div>
 
+                  <div class="border rounded-3 p-3 bg-info-subtle mb-3">
+                    <div class="d-flex align-items-start gap-2 mb-2">
+                      <i class="bi bi-info-circle-fill text-info-emphasis mt-1"></i>
+                      <div class="small text-info-emphasis fw-semibold">Escopo de atuação</div>
+                    </div>
+                    <div class="form-check mb-2">
+                      <input class="form-check-input" type="checkbox" id="network_wide" name="network_wide" value="1" <?= (int)($teacher['network_wide'] ?? 0) === 1 ? 'checked' : '' ?>>
+                      <label class="form-check-label" for="network_wide">
+                        Atua na rede de ensino completa (todas as instituições)
+                      </label>
+                    </div>
+                    <div class="text-muted small mt-2">
+                      Marcado: o(a) colaborador(a) pode atuar em qualquer instituição. A seleção ao lado fica desabilitada.
+                      Admin de instituição não verá estes colaboradores.
+                    </div>
+                    <div id="nw_hint" class="alert alert-info py-2 px-3 mt-3 mb-0" style="display:none;">
+                      Seleção de instituições desabilitada porque “Rede completa” está marcado.
+                    </div>
+                  </div>
+
                   <?php if (empty($schools)): ?>
-                    <div class="alert alert-warning py-2">Nenhuma escola ativa cadastrada.</div>
+                    <div class="alert alert-warning py-2">Nenhuma instituição ativa cadastrada.</div>
                   <?php endif; ?>
 
-                  <select multiple size="10" class="form-select" id="schools" name="schools[]">
+                  <select multiple size="11" class="form-select" id="schools" name="schools[]">
                     <?php foreach ($schools as $s): ?>
                       <option value="<?= (int)$s['id'] ?>" <?= in_array((int)$s['id'], $teacherSchools, true) ? 'selected' : '' ?>>
                         <?= esc($s['name']) ?>
@@ -269,25 +428,7 @@ $allPeriods = get_class_periods();
                   </div>
 
                   <div id="schools_no_results" class="text-muted small mt-2" style="display:none;">
-                    Nenhuma escola encontrada para o filtro aplicado.
-                  </div>
-                </div>
-
-                <div class="col-lg-5">
-                  <div class="border-0 rounded p-3 bg-info-subtle h-100">
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" id="network_wide" name="network_wide" value="1" <?= (int)($teacher['network_wide'] ?? 0) === 1 ? 'checked' : '' ?>>
-                      <label class="form-check-label" for="network_wide">
-                        Atua na rede de ensino completa (todas as escolas)
-                      </label>
-                    </div>
-                    <div class="text-muted small mt-2">
-                      Marcado: o(a) colaborador(a) pode atuar em qualquer escola. A seleção ao lado fica desabilitada.
-                      Admin de escola não verá estes colaboradores.
-                    </div>
-                    <div id="nw_hint" class="alert alert-info py-2 px-3 mt-3" style="display:none;">
-                      Seleção de escolas desabilitada porque “Rede completa” está marcado.
-                    </div>
+                    Nenhuma instituição encontrada para o filtro aplicado.
                   </div>
                 </div>
               </div>
@@ -357,11 +498,15 @@ $allPeriods = get_class_periods();
                 nwUpdate();
               })();
             </script>
-          </div>
+          </section>
 
-          <div class="card mb-4">
-            <div class="card-header"><strong>Rotina de trabalho</strong></div>
-            <div class="card-body">
+          <section class="app-section-card">
+            <header class="app-section-card__header">
+              <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-calendar-week"></i>Seção 3</span>
+              <h2 class="app-section-card__title">Rotina de trabalho</h2>
+              <span class="app-section-card__hint">Jornada semanal por aulas ou horário fixo</span>
+            </header>
+            <div class="app-section-card__body admin-form-section">
               <?php
               // Sugestões de padrão a partir de algum dia já preenchido
               $defCount = 0;
@@ -420,11 +565,11 @@ $allPeriods = get_class_periods();
                   <table class="table table-bordered align-middle">
                     <thead class="table-light">
                       <tr>
-                        <th style="width: 180px;">Dia</th>
-                        <th style="width: 90px;">Ativo</th>
-                        <th style="width: 160px;">Nº de Aulas</th>
-                        <th style="width: 220px;">Duração (min)</th>
-                        <th style="width: 220px;">Total do dia</th>
+                        <th scope="col" style="width: 180px;">Dia</th>
+                        <th scope="col" style="width: 90px;">Ativo</th>
+                        <th scope="col" style="width: 160px;">Nº de Aulas</th>
+                        <th scope="col" style="width: 220px;">Duração (min)</th>
+                        <th scope="col" style="width: 220px;">Total do dia</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -699,11 +844,12 @@ $allPeriods = get_class_periods();
                   <table class="table table-bordered align-middle">
                     <thead class="table-light">
                       <tr>
-                        <th>Dia</th>
-                        <th>Entrada</th>
-                        <th>Saída</th>
-                        <th>Intervalo (min)</th>
-                        <th>Duração líquida</th>
+                        <th scope="col">Dia</th>
+                        <th scope="col">Entrada</th>
+                        <th scope="col">Saída</th>
+                        <th scope="col" title="Marque para turnos noturnos (ex: 18h → 06h do dia seguinte)">Próx. dia</th>
+                        <th scope="col">Intervalo (min)</th>
+                        <th scope="col">Duração líquida</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -714,11 +860,17 @@ $allPeriods = get_class_periods();
                         $start = $startRaw ? substr($startRaw, 0, 5) : '';
                         $end = $endRaw ? substr($endRaw, 0, 5) : '';
                         $break = isset($ts['break_minutes']) ? (int)$ts['break_minutes'] : 0;
+                        $endNextDay = !empty($ts['end_next_day']) ? 1 : 0;
                       ?>
                         <tr data-day="<?= (int)$k ?>">
                           <td class="fw-semibold"><?= esc($dia) ?></td>
                           <td><input type="time" class="form-control time-start" name="time_schedule[<?= $k ?>][start]" step="60" placeholder="hh:mm" value="<?= esc($start) ?>"></td>
                           <td><input type="time" class="form-control time-end" name="time_schedule[<?= $k ?>][end]" step="60" placeholder="hh:mm" value="<?= esc($end) ?>"></td>
+                          <td class="text-center">
+                            <div class="form-check d-inline-block">
+                              <input type="checkbox" class="form-check-input time-end-next-day" name="time_schedule[<?= $k ?>][end_next_day]" value="1" <?= $endNextDay ? 'checked' : '' ?> title="Saída no dia seguinte">
+                            </div>
+                          </td>
                           <td><input type="number" class="form-control time-break" name="time_schedule[<?= $k ?>][break]" min="0" max="600" step="5" inputmode="numeric" value="<?= esc($break) ?>"></td>
                           <td><span class="badge bg-light text-dark day-time-total">0 min (00:00)</span></td>
                         </tr>
@@ -760,11 +912,13 @@ $allPeriods = get_class_periods();
                       const startEl = row.querySelector('.time-start');
                       const endEl = row.querySelector('.time-end');
                       const breakEl = row.querySelector('.time-break');
+                      const nextDayEl = row.querySelector('.time-end-next-day');
                       const badge = row.querySelector('.day-time-total');
 
                       const start = startEl?.value || '';
                       const end = endEl?.value || '';
                       const br = Math.max(0, parseInt(breakEl?.value ?? '0', 10) || 0);
+                      const endNextDay = !!nextDayEl?.checked;
 
                       // Reset visual state
                       [startEl, endEl, breakEl].forEach(el => el?.classList.remove('is-invalid'));
@@ -791,13 +945,15 @@ $allPeriods = get_class_periods();
                         return 0;
                       }
 
-                      if (endMin <= startMin) {
+                      // Sem flag "próximo dia": saída deve ser estritamente após entrada
+                      if (!endNextDay && endMin <= startMin) {
                         endEl?.classList.add('is-invalid');
-                        if (badge) badge.textContent = '—';
+                        if (badge) badge.textContent = '— (marque "Próx. dia"?)';
                         return 0;
                       }
 
-                      const gross = endMin - startMin;
+                      // Com flag: turno cruza a meia-noite (ou turno de 24h: start == end)
+                      const gross = endNextDay ? (1440 - startMin + endMin) : (endMin - startMin);
                       if (br >= gross) {
                         breakEl?.classList.add('is-invalid');
                         if (badge) badge.textContent = '—';
@@ -805,7 +961,8 @@ $allPeriods = get_class_periods();
                       }
 
                       const net = gross - br;
-                      if (badge) badge.textContent = `${net} min (${minToHHMM(net)})`;
+                      const suffix = endNextDay ? ' (saída no dia seguinte)' : '';
+                      if (badge) badge.textContent = `${net} min (${minToHHMM(net)})${suffix}`;
                       return net;
                     }
 
@@ -824,6 +981,7 @@ $allPeriods = get_class_periods();
                         tr.querySelector(sel)?.addEventListener('input', updateWeeklyTotal);
                         tr.querySelector(sel)?.addEventListener('blur', updateWeeklyTotal);
                       });
+                      tr.querySelector('.time-end-next-day')?.addEventListener('change', updateWeeklyTotal);
                       // Inicial
                       validateRow(tr);
                     });
@@ -919,22 +1077,170 @@ $allPeriods = get_class_periods();
                   })();
                 </script>
               </div>
+
+              <div id="schedule_hours_block" class="mt-2" style="display:none;">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                  <h6 class="mb-0">Jornada por horas/dia</h6>
+                  <span class="badge bg-light text-dark ms-1">defina o total de horas trabalhadas por dia (sem horário fixo)</span>
+
+                  <div class="ms-auto small text-muted">
+                    Total semanal: <strong id="weekly_hours_total_min">0</strong> min (<strong id="weekly_hours_total_h">00:00</strong>)
+                  </div>
+                </div>
+
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                  <div class="input-group input-group-sm">
+                    <span class="input-group-text" title="Preencher horas para todos">Preencher</span>
+                    <input type="number" class="form-control" id="apply_hours_total" min="0" max="1440" step="15" inputmode="numeric" placeholder="min/dia" title="Total de minutos por dia">
+                    <span class="input-group-text">int.</span>
+                    <input type="number" class="form-control" id="apply_hours_break" min="0" max="600" step="5" inputmode="numeric" placeholder="min" title="Intervalo previsto (min)">
+                    <button type="button" id="btnApplyAllHours" class="btn btn-outline-secondary">Aplicar</button>
+                  </div>
+
+                  <div class="vr mx-1 d-none d-md-block"></div>
+
+                  <div class="btn-group btn-group-sm" role="group">
+                    <button type="button" class="btn btn-outline-secondary" id="btnHoursWorkdays" title="Preencher apenas Seg a Sex com o padrão de cima">Dias úteis</button>
+                    <button type="button" class="btn btn-outline-secondary" id="btnHoursWeekendOff" title="Zerar Sáb e Dom">Fds off</button>
+                    <button type="button" class="btn btn-outline-secondary" id="btnHoursClearAll" title="Limpar todos os dias">Limpar</button>
+                  </div>
+                </div>
+
+                <div class="table-responsive">
+                  <table class="table table-bordered align-middle">
+                    <thead class="table-light">
+                      <tr>
+                        <th scope="col">Dia</th>
+                        <th scope="col">Horas trabalhadas (min)</th>
+                        <th scope="col">Intervalo previsto (min)</th>
+                        <th scope="col">Equivale a</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <?php foreach ($weekdays as $k => $dia):
+                        $hs = $hoursSchedules[$k] ?? null;
+                        $totalMin = isset($hs['total_minutes']) ? (int)$hs['total_minutes'] : 0;
+                        $breakMin = isset($hs['break_minutes']) ? (int)$hs['break_minutes'] : 0;
+                      ?>
+                        <tr data-day="<?= (int)$k ?>">
+                          <td class="fw-semibold"><?= esc($dia) ?></td>
+                          <td><input type="number" class="form-control hours-total" name="hours_schedule[<?= $k ?>][total_minutes]" min="0" max="1440" step="15" inputmode="numeric" value="<?= (int)$totalMin ?>"></td>
+                          <td><input type="number" class="form-control hours-break" name="hours_schedule[<?= $k ?>][break_minutes]" min="0" max="600" step="5" inputmode="numeric" value="<?= (int)$breakMin ?>"></td>
+                          <td><span class="badge bg-light text-dark day-hours-label">0h 00min</span></td>
+                        </tr>
+                      <?php endforeach; ?>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="alert alert-info py-2 px-3">
+                  Para motoristas, monitores e outros colaboradores cuja jornada é definida por <strong>total de horas/dia</strong> em vez de horário fixo. O sistema confere se a quantidade de horas trabalhadas no dia atinge a meta.
+                </div>
+
+                <script>
+                  (function() {
+                    const block = document.getElementById('schedule_hours_block');
+                    if (!block) return;
+                    const qa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+                    const weeklyMinEl = document.getElementById('weekly_hours_total_min');
+                    const weeklyHumanEl = document.getElementById('weekly_hours_total_h');
+
+                    function minToHHMM(m) {
+                      m = Math.max(0, m | 0);
+                      const h = Math.floor(m / 60);
+                      const mm = m % 60;
+                      return String(h).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+                    }
+                    function fmtHuman(m) {
+                      m = Math.max(0, m | 0);
+                      const h = Math.floor(m / 60);
+                      const mm = m % 60;
+                      if (h === 0) return mm + 'min';
+                      if (mm === 0) return h + 'h';
+                      return h + 'h ' + String(mm).padStart(2, '0') + 'min';
+                    }
+
+                    function updateRow(row) {
+                      const total = parseInt(row.querySelector('.hours-total').value || '0', 10);
+                      const brk   = parseInt(row.querySelector('.hours-break').value || '0', 10);
+                      const liquid = Math.max(0, total - brk);
+                      row.querySelector('.day-hours-label').textContent = fmtHuman(total) + (brk > 0 ? ' (líq. ' + fmtHuman(liquid) + ')' : '');
+                    }
+                    function updateWeekly() {
+                      let total = 0;
+                      qa('tbody tr[data-day]', block).forEach(tr => {
+                        total += parseInt(tr.querySelector('.hours-total').value || '0', 10);
+                        updateRow(tr);
+                      });
+                      weeklyMinEl.textContent = total;
+                      weeklyHumanEl.textContent = minToHHMM(total);
+                    }
+
+                    qa('tbody tr[data-day]', block).forEach(tr => {
+                      ['hours-total', 'hours-break'].forEach(cls => {
+                        tr.querySelector('.' + cls).addEventListener('input', updateWeekly);
+                      });
+                    });
+
+                    document.getElementById('btnApplyAllHours')?.addEventListener('click', () => {
+                      const t = document.getElementById('apply_hours_total').value;
+                      const b = document.getElementById('apply_hours_break').value;
+                      qa('tbody tr[data-day]', block).forEach(tr => {
+                        if (t !== '') tr.querySelector('.hours-total').value = t;
+                        if (b !== '') tr.querySelector('.hours-break').value = b;
+                      });
+                      updateWeekly();
+                    });
+                    document.getElementById('btnHoursWorkdays')?.addEventListener('click', () => {
+                      const t = document.getElementById('apply_hours_total').value;
+                      const b = document.getElementById('apply_hours_break').value;
+                      qa('tbody tr[data-day]', block).forEach(tr => {
+                        const day = parseInt(tr.dataset.day, 10);
+                        if (day >= 1 && day <= 5) {
+                          if (t !== '') tr.querySelector('.hours-total').value = t;
+                          if (b !== '') tr.querySelector('.hours-break').value = b;
+                        }
+                      });
+                      updateWeekly();
+                    });
+                    document.getElementById('btnHoursWeekendOff')?.addEventListener('click', () => {
+                      qa('tbody tr[data-day]', block).forEach(tr => {
+                        const day = parseInt(tr.dataset.day, 10);
+                        if (day === 0 || day === 6) {
+                          tr.querySelector('.hours-total').value = 0;
+                          tr.querySelector('.hours-break').value = 0;
+                        }
+                      });
+                      updateWeekly();
+                    });
+                    document.getElementById('btnHoursClearAll')?.addEventListener('click', () => {
+                      qa('tbody tr[data-day]', block).forEach(tr => {
+                        tr.querySelector('.hours-total').value = 0;
+                        tr.querySelector('.hours-break').value = 0;
+                      });
+                      updateWeekly();
+                    });
+
+                    updateWeekly();
+                  })();
+                </script>
+              </div>
             </div>
-          </div>
+          </section>
 
           <?php if (!empty($allPeriods)): ?>
-          <!-- Grade Horária - Atribuição de Períodos -->
-          <div class="card mb-4" id="period_assignments_card">
-            <div class="card-header d-flex align-items-center justify-content-between">
-              <div>
-                <strong><i class="bi bi-calendar-week"></i> Grade Horária - Períodos de Aula</strong>
-                <small class="text-muted d-block mt-1">Sistema avançado: marque em quais horários o professor tem aula (permite múltiplos check-ins por dia)</small>
-              </div>
-              <button type="button" class="btn btn-sm btn-outline-info" data-bs-toggle="collapse" data-bs-target="#periodHelpInfo">
-                <i class="bi bi-info-circle"></i> Ajuda
-              </button>
-            </div>
-            <div class="card-body">
+          <!-- Grade Horária - Atribuição de Períodos (colapsável para reduzir densidade) -->
+          <section class="app-section-card" id="period_assignments_card">
+            <header class="app-section-card__header" role="button" tabindex="0" data-bs-toggle="collapse" data-bs-target="#period_assignments_body" aria-expanded="false" aria-controls="period_assignments_body" style="cursor:pointer;">
+              <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-calendar-week"></i>Seção 4</span>
+              <h2 class="app-section-card__title">Grade Horária — Períodos de Aula</h2>
+              <span class="app-section-card__hint">
+                <i class="bi bi-chevron-down collapse-icon"></i>
+                <button type="button" class="btn btn-sm btn-outline-info ms-2" data-bs-toggle="collapse" data-bs-target="#periodHelpInfo" onclick="event.stopPropagation();" aria-label="Ajuda sobre grade horária">
+                  <i class="bi bi-info-circle"></i><span class="d-none d-md-inline ms-1">Ajuda</span>
+                </button>
+              </span>
+            </header>
+            <div class="app-section-card__body collapse" id="period_assignments_body">
               <div class="collapse mb-3" id="periodHelpInfo">
                 <div class="alert alert-info">
                   <h6><i class="bi bi-lightbulb"></i> Como funciona:</h6>
@@ -951,10 +1257,10 @@ $allPeriods = get_class_periods();
                 <table class="table table-bordered table-sm">
                   <thead class="table-light">
                     <tr>
-                      <th style="width: 120px;">Período</th>
-                      <th style="width: 120px;">Horário</th>
+                      <th scope="col" style="width: 120px;">Período</th>
+                      <th scope="col" style="width: 120px;">Horário</th>
                       <?php foreach ($weekdays as $k => $dia): ?>
-                        <th class="text-center" style="width: 100px;">
+                        <th scope="col" class="text-center" style="width: 100px;">
                           <?= esc($dia) ?>
                           <br><small class="text-muted"><?= ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'][$k] ?></small>
                         </th>
@@ -1039,19 +1345,23 @@ $allPeriods = get_class_periods();
                 })();
               </script>
             </div>
-          </div>
+          </section>
           <?php endif; ?>
 
           <!-- Cadastro Facial -->
-          <div class="card mb-4">
-            <div class="card-header d-flex align-items-center justify-content-between">
-              <strong><i class="bi bi-person-bounding-box me-1"></i> Cadastro Facial</strong>
-              <span id="faceEnrollBadge" class="badge <?= !empty($teacher['face_descriptors']) ? 'bg-success' : 'bg-secondary' ?>">
-                <?= !empty($teacher['face_descriptors']) ? 'Rosto cadastrado' : 'Sem cadastro' ?>
+          <section class="app-section-card">
+            <header class="app-section-card__header">
+              <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-person-bounding-box"></i>Seção <?= !empty($allPeriods) ? '5' : '4' ?></span>
+              <h2 class="app-section-card__title">Cadastro Facial</h2>
+              <span class="app-section-card__hint">
+                <span id="faceEnrollBadge" class="badge <?= !empty($teacher['face_descriptors']) ? 'text-bg-success-subtle border border-success-subtle text-success-emphasis' : 'text-bg-secondary-subtle border border-secondary-subtle text-secondary-emphasis' ?>">
+                  <i class="bi <?= !empty($teacher['face_descriptors']) ? 'bi-check-circle' : 'bi-dash-circle' ?> me-1"></i>
+                  <?= !empty($teacher['face_descriptors']) ? 'Rosto cadastrado' : 'Sem cadastro' ?>
+                </span>
               </span>
-            </div>
-            <div class="card-body">
-              <p class="text-muted small mb-3">Capture fotos do rosto do colaborador para habilitar o reconhecimento facial no registro de ponto.</p>
+            </header>
+            <div class="app-section-card__body">
+              <p class="text-muted small mb-3">Opcional: execute a validação biométrica guiada para gerar um cadastro facial. O colaborador também pode cadastrar no momento do registro do ponto.</p>
               <input type="hidden" name="face_descriptors" id="faceDescriptorsInput" value="">
               <input type="hidden" name="face_descriptors_clear" id="faceDescriptorsClear" value="0">
 
@@ -1063,14 +1373,18 @@ $allPeriods = get_class_periods();
                   </div>
                 </div>
 
+                <div class="progress mb-2" style="height:8px;">
+                  <div id="faceProgressBar" class="progress-bar bg-success" role="progressbar" style="width:0%"></div>
+                </div>
+                <div id="faceStepLabel" class="small text-muted text-center mb-2">Pronto para iniciar validação facial.</div>
                 <div id="faceCapturedPreviews" class="d-flex flex-wrap gap-2 mb-3 justify-content-center"></div>
 
                 <div class="d-flex flex-wrap gap-2 justify-content-center">
                   <button type="button" class="btn btn-outline-primary btn-sm" id="btnFaceStartCam">
-                    <i class="bi bi-camera-video me-1"></i> Abrir Câmera
+                    <i class="bi bi-shield-check me-1"></i> Iniciar Reconhecimento
                   </button>
-                  <button type="button" class="btn btn-primary btn-sm" id="btnFaceCapture" style="display:none">
-                    <i class="bi bi-camera me-1"></i> Capturar Rosto (<span id="faceCaptureCount">0</span>/3)
+                  <button type="button" class="btn btn-outline-secondary btn-sm" id="btnFaceRestart" style="display:none">
+                    <i class="bi bi-arrow-clockwise me-1"></i> Reiniciar Processo
                   </button>
                   <button type="button" class="btn btn-outline-danger btn-sm" id="btnFaceClear" style="<?= !empty($teacher['face_descriptors']) ? '' : 'display:none' ?>">
                     <i class="bi bi-trash me-1"></i> Remover Cadastro
@@ -1079,19 +1393,44 @@ $allPeriods = get_class_periods();
                 <div id="faceStatus" class="text-center mt-2 small text-muted"></div>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div class="d-flex gap-2 mt-3">
-            <button id="submitBtn" class="btn btn-success" type="submit" name="action" value="save" title="Salvar (Atalho: Alt+Shift+S)" accesskey="s">
-              <i class="bi bi-save me-1" aria-hidden="true"></i>
-              <span class="btn-text">Salvar Colaborador(a)</span>
-            </button>
-            <a href="teachers.php" class="btn btn-outline-secondary" title="Voltar para a lista (Atalho: Alt+Shift+V)" accesskey="v">
-              <i class="bi bi-arrow-left me-1" aria-hidden="true"></i>
-              Voltar
-            </a>
+          <div class="app-form-actions">
+            <span class="app-form-actions__hint">
+              <i class="bi bi-info-circle"></i>
+              <?= $id ? 'Editando colaborador #' . (int)$id : 'Novo colaborador' ?> · Atalho: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>
+            </span>
+            <div class="app-form-actions__btns">
+              <a href="teachers.php" class="btn btn-outline-secondary" title="Voltar (Alt+Shift+V)" accesskey="v">
+                <i class="bi bi-arrow-left me-1"></i>Voltar
+              </a>
+              <button id="submitBtn" class="btn btn-success" type="submit" name="action" value="save" title="Salvar (Alt+Shift+S)" accesskey="s">
+                <i class="bi bi-save me-1"></i>
+                <span class="btn-text">Salvar Colaborador</span>
+              </button>
+            </div>
           </div>
         </form>
+
+        <script>
+          // Disable do botão Salvar imediatamente após o primeiro click — protege
+          // contra duplo-click, refresh do form e BACK+save (junto com o token de
+          // idempotência server-side).
+          (function() {
+            const form = document.getElementById('teacherForm');
+            const btn = document.getElementById('submitBtn');
+            if (!form || !btn) return;
+            form.addEventListener('submit', () => {
+              if (btn.disabled) return;
+              setTimeout(() => {
+                btn.disabled = true;
+                const span = btn.querySelector('.btn-text');
+                if (span) span.textContent = 'Salvando…';
+                btn.querySelector('i.bi-save')?.classList.replace('bi-save', 'bi-hourglass-split');
+              }, 0);
+            });
+          })();
+        </script>
 
         <script>
           (function() {
@@ -1132,21 +1471,26 @@ $allPeriods = get_class_periods();
   <script>
     function toggleScheduleBlocks() {
       const sel = document.getElementById('type_id');
-      const mode = sel?.options[sel.selectedIndex]?.getAttribute('data-mode') || 'classes';
+      const mode = sel?.options[sel.selectedIndex]?.getAttribute('data-mode') || 'time';
       const classesBlock = document.getElementById('schedule_classes_block');
       const timeBlock = document.getElementById('schedule_time_block');
+      const hoursBlock = document.getElementById('schedule_hours_block');
       const showClasses = mode === 'classes';
       const showTime = mode === 'time';
+      const showHours = mode === 'hours';
       classesBlock.style.display = showClasses ? '' : 'none';
       timeBlock.style.display = showTime ? '' : 'none';
+      if (hoursBlock) hoursBlock.style.display = showHours ? '' : 'none';
       classesBlock.querySelectorAll('input').forEach(el => el.disabled = !showClasses);
       timeBlock.querySelectorAll('input').forEach(el => el.disabled = !showTime);
+      if (hoursBlock) hoursBlock.querySelectorAll('input').forEach(el => el.disabled = !showHours);
     }
     document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('type_id')?.addEventListener('change', toggleScheduleBlocks);
       toggleScheduleBlocks();
       const submitBtn = document.getElementById('submitBtn');
-      document.getElementById('teacherForm')?.addEventListener('submit', () => {
+      document.getElementById('teacherForm')?.addEventListener('submit', (event) => {
+        if (event.defaultPrevented) return;
         if (submitBtn) {
           submitBtn.disabled = true;
           const textEl = submitBtn.querySelector('.btn-text');
@@ -1171,17 +1515,106 @@ $allPeriods = get_class_periods();
   const video = document.getElementById('faceVideo');
   const videoWrap = document.getElementById('faceVideoWrap');
   const btnStart = document.getElementById('btnFaceStartCam');
-  const btnCapture = document.getElementById('btnFaceCapture');
+  const btnRestart = document.getElementById('btnFaceRestart');
   const btnClear = document.getElementById('btnFaceClear');
   const previews = document.getElementById('faceCapturedPreviews');
   const hiddenInput = document.getElementById('faceDescriptorsInput');
+  const clearInput = document.getElementById('faceDescriptorsClear');
   const statusEl = document.getElementById('faceStatus');
   const badge = document.getElementById('faceEnrollBadge');
-  const countEl = document.getElementById('faceCaptureCount');
+  const progressBar = document.getElementById('faceProgressBar');
+  const stepLabel = document.getElementById('faceStepLabel');
+  const form = document.getElementById('teacherForm');
+
+  const hasStoredEnrollment = <?= !empty($teacher['face_descriptors']) ? 'true' : 'false' ?>;
+  const requiredSteps = [
+    { label: 'Olhe para frente com o rosto centralizado', check: ({yaw, pitch, coverage, centered}) => centered && coverage >= 0.08 && coverage <= 0.46 && Math.abs(yaw) <= 0.12 && pitch >= 0.16 && pitch <= 0.50 },
+    { label: 'Vire levemente para a esquerda', check: ({yaw, coverage, centered}) => centered && coverage >= 0.08 && coverage <= 0.48 && yaw <= -0.08 },
+    { label: 'Vire levemente para a direita', check: ({yaw, coverage, centered}) => centered && coverage >= 0.08 && coverage <= 0.48 && yaw >= 0.08 },
+    { label: 'Mantenha o rosto centralizado por um instante', check: ({yaw, pitch, coverage, centered}) => centered && coverage >= 0.08 && coverage <= 0.48 && Math.abs(yaw) <= 0.16 && pitch >= 0.12 && pitch <= 0.58 },
+    { label: 'Retorne ao centro e mantenha-se estável', check: ({yaw, pitch, coverage, centered}) => centered && coverage >= 0.08 && coverage <= 0.46 && Math.abs(yaw) <= 0.14 && pitch >= 0.14 && pitch <= 0.52 }
+  ];
 
   let faceStream = null;
   let descriptors = [];
+  let running = false;
   let modelsLoaded = false;
+  let detecting = false;
+  let tickTs = 0;
+  let lastCaptureMs = 0;
+  let stepIndex = 0;
+  let lostFaceFrames = 0;
+
+  function avgPoint(points) {
+    const total = points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+    return { x: total.x / points.length, y: total.y / points.length };
+  }
+
+  function dist(a, b) {
+    let sum = 0;
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+      const d = Number(a[i]) - Number(b[i]);
+      sum += d * d;
+    }
+    return Math.sqrt(sum);
+  }
+
+  function isDescriptorDiverse(nextDescriptor) {
+    if (!descriptors.length) return true;
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (const descriptor of descriptors) {
+      const d = dist(descriptor, nextDescriptor);
+      if (d < minDistance) minDistance = d;
+    }
+    return minDistance >= 0.16;
+  }
+
+  function updateProgress() {
+    const done = descriptors.length;
+    const total = requiredSteps.length;
+    const pct = Math.max(0, Math.min(100, (done / total) * 100));
+    progressBar.style.width = pct + '%';
+    stepLabel.textContent = done >= total
+      ? 'Validação biométrica concluída.'
+      : `Etapa ${done + 1} de ${total}: ${requiredSteps[done].label}`;
+  }
+
+  function resetEnrollmentState(clearSaved = false) {
+    descriptors = [];
+    stepIndex = 0;
+    lastCaptureMs = 0;
+    lostFaceFrames = 0;
+    previews.innerHTML = '';
+    hiddenInput.value = '';
+    if (clearSaved) clearInput.value = '1';
+    updateProgress();
+  }
+
+  function capturePreview() {
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0);
+    const thumb = document.createElement('img');
+    thumb.src = canvas.toDataURL('image/jpeg', 0.72);
+    thumb.style.cssText = 'width:68px;height:68px;object-fit:cover;border-radius:8px;border:2px solid #198754;';
+    previews.appendChild(thumb);
+  }
+
+  function stopCamera() {
+    running = false;
+    detecting = false;
+    if (faceStream) {
+      faceStream.getTracks().forEach(t => t.stop());
+      faceStream = null;
+    }
+    video.srcObject = null;
+    videoWrap.style.display = 'none';
+  }
 
   async function loadModels() {
     statusEl.textContent = 'Carregando modelos de reconhecimento facial...';
@@ -1197,7 +1630,7 @@ $allPeriods = get_class_periods();
     }
   }
 
-  btnStart.addEventListener('click', async () => {
+  async function startCamera() {
     if (!modelsLoaded) await loadModels();
     try {
       faceStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'user', width:{ideal:640}, height:{ideal:480} }, audio:false });
@@ -1205,64 +1638,138 @@ $allPeriods = get_class_periods();
       await video.play();
       videoWrap.style.display = 'block';
       btnStart.style.display = 'none';
-      btnCapture.style.display = '';
-      statusEl.textContent = 'Centralize o rosto e clique em Capturar.';
+      btnRestart.style.display = '';
+      statusEl.textContent = 'Validação em andamento.';
+      running = true;
+      if (!detecting) {
+        detecting = true;
+        requestAnimationFrame(detectionTick);
+      }
     } catch (e) {
       statusEl.textContent = 'Erro ao abrir câmera: ' + e.message;
     }
-  });
+  }
 
-  btnCapture.addEventListener('click', async () => {
-    if (!faceStream || !modelsLoaded) return;
-    statusEl.textContent = 'Analisando rosto...';
-    btnCapture.disabled = true;
+  async function detectionTick(ts) {
+    if (!running || !detecting || !faceStream || !modelsLoaded) return;
+    if (ts - tickTs < 450) {
+      requestAnimationFrame(detectionTick);
+      return;
+    }
+    tickTs = ts;
+
+    if (descriptors.length >= requiredSteps.length) {
+      stopCamera();
+      requestAnimationFrame(detectionTick);
+      return;
+    }
+
     try {
-      const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+      const detections = await faceapi
+        .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.45 }))
         .withFaceLandmarks(true)
-        .withFaceDescriptor();
-      if (!det) {
-        statusEl.textContent = 'Nenhum rosto detectado. Tente novamente.';
-        btnCapture.disabled = false;
+        .withFaceDescriptors();
+
+      if (!detections.length) {
+        lostFaceFrames++;
+        if (lostFaceFrames >= 6) {
+          statusEl.textContent = 'Rosto não detectado com clareza. Ajuste distância e iluminação.';
+        } else {
+          statusEl.textContent = requiredSteps[stepIndex].label;
+        }
+        requestAnimationFrame(detectionTick);
         return;
       }
-      const desc = Array.from(det.descriptor);
-      descriptors.push(desc);
+      lostFaceFrames = 0;
+      if (detections.length > 1) {
+        statusEl.textContent = 'Foi detectado mais de um rosto. Mantenha apenas uma pessoa na câmera.';
+        requestAnimationFrame(detectionTick);
+        return;
+      }
 
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
-      ctx.drawImage(video, 0, 0);
-      const thumb = document.createElement('img');
-      thumb.src = canvas.toDataURL('image/jpeg', 0.7);
-      thumb.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid #198754;';
-      previews.appendChild(thumb);
+      const det = detections[0];
+      const box = det.detection.box;
+      const vw = video.videoWidth || 640;
+      const vh = video.videoHeight || 480;
+      const coverage = (box.width * box.height) / (vw * vh);
+      const centerX = box.x + box.width / 2;
+      const centerY = box.y + box.height / 2;
+      const centered = Math.abs(centerX / vw - 0.5) <= 0.27 && Math.abs(centerY / vh - 0.5) <= 0.27;
+      const leftEye = avgPoint(det.landmarks.getLeftEye());
+      const rightEye = avgPoint(det.landmarks.getRightEye());
+      const eyesMid = { x: (leftEye.x + rightEye.x) / 2, y: (leftEye.y + rightEye.y) / 2 };
+      const nosePoints = det.landmarks.getNose();
+      const nose = nosePoints[Math.min(3, nosePoints.length - 1)];
+      const yaw = (nose.x - centerX) / box.width;
+      const pitch = (nose.y - eyesMid.y) / box.height;
+      const currentStep = requiredSteps[stepIndex];
+      const isStepAligned = currentStep.check({ yaw, pitch, coverage, centered });
+      const scoreOk = Number(det.detection.score || 0) >= 0.45;
 
-      countEl.textContent = descriptors.length;
+      if (!isStepAligned || !scoreOk) {
+        statusEl.textContent = currentStep.label;
+        requestAnimationFrame(detectionTick);
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastCaptureMs < 900) {
+        statusEl.textContent = 'Mantenha a posição por mais um instante...';
+        requestAnimationFrame(detectionTick);
+        return;
+      }
+
+      const nextDescriptor = Array.from(det.descriptor || []);
+      if (nextDescriptor.length !== 128) {
+        statusEl.textContent = 'Não foi possível extrair o descritor facial.';
+        requestAnimationFrame(detectionTick);
+        return;
+      }
+
+      if (!isDescriptorDiverse(nextDescriptor)) {
+        statusEl.textContent = 'Amostra muito parecida. Ajuste levemente o ângulo e tente novamente.';
+        requestAnimationFrame(detectionTick);
+        return;
+      }
+
+      descriptors.push(nextDescriptor);
+      stepIndex = descriptors.length;
+      lastCaptureMs = now;
+      capturePreview();
       hiddenInput.value = JSON.stringify(descriptors);
-      statusEl.textContent = 'Captura ' + descriptors.length + '/3 concluída.';
+      clearInput.value = '0';
       btnClear.style.display = '';
-      badge.className = 'badge bg-success';
-      badge.textContent = descriptors.length + ' captura(s)';
+      badge.className = 'badge bg-warning text-dark';
+      badge.textContent = `${descriptors.length}/${requiredSteps.length} validado`;
+      updateProgress();
+      statusEl.textContent = descriptors.length >= requiredSteps.length
+        ? 'Validação biométrica concluída. Salve para gravar.'
+        : `Amostra ${descriptors.length}/${requiredSteps.length} validada.`;
 
-      if (descriptors.length >= 3) {
+      if (descriptors.length >= requiredSteps.length) {
+        badge.className = 'badge bg-success';
+        badge.textContent = 'Validação concluída';
         stopCamera();
-        statusEl.textContent = '3 capturas concluídas. Salve o colaborador para gravar.';
       }
     } catch (e) {
       statusEl.textContent = 'Erro na detecção: ' + e.message;
     }
-    btnCapture.disabled = false;
+    requestAnimationFrame(detectionTick);
+  }
+
+  btnStart.addEventListener('click', async () => {
+    resetEnrollmentState(false);
+    await startCamera();
+  });
+
+  btnRestart.addEventListener('click', async () => {
+    resetEnrollmentState(false);
+    stopCamera();
+    await startCamera();
   });
 
   btnClear.addEventListener('click', () => {
-    descriptors = [];
-    hiddenInput.value = '';
-    document.getElementById('faceDescriptorsClear').value = '1';
-    previews.innerHTML = '';
-    countEl.textContent = '0';
+    resetEnrollmentState(true);
     badge.className = 'badge bg-secondary';
     badge.textContent = 'Sem cadastro';
     btnClear.style.display = 'none';
@@ -1270,17 +1777,37 @@ $allPeriods = get_class_periods();
     stopCamera();
   });
 
-  function stopCamera() {
-    if (faceStream) { faceStream.getTracks().forEach(t => t.stop()); faceStream = null; }
-    video.srcObject = null;
-    videoWrap.style.display = 'none';
-    btnCapture.style.display = 'none';
-    btnStart.style.display = '';
-  }
+  form?.addEventListener('submit', () => {
+    if (running) {
+      stopCamera();
+    }
+  });
+
+  window.addEventListener('beforeunload', stopCamera);
+  updateProgress();
 })();
 </script>
+    <?php include __DIR__ . '/../_footer.php'; ?>
 </body>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php if ($faceNotice && ($faceNotice['type'] ?? '') === 'face_duplicate_active'): ?>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const modalEl = document.getElementById('faceDuplicateModal');
+  if (!modalEl || typeof bootstrap === 'undefined') return;
+  const modal = new bootstrap.Modal(modalEl);
+  modal.show();
+});
+</script>
+<?php endif; ?>
 
 </html>
+
+
+
+
+
+
+
+

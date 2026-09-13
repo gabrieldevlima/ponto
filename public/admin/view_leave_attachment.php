@@ -38,11 +38,40 @@ if (empty($leave['attachment'])) {
     exit('Este afastamento não possui anexo');
 }
 
-$attachmentPath = __DIR__ . '/../attachments/leaves/' . $leave['attachment'];
+// Novo caminho seguro (fora do webroot). Fallback para caminho legado (arquivos anteriores à migração).
+// Defense in depth: realpath + strpos garante que o path final está DENTRO do diretório autorizado.
+// Sem isso, um $leave['attachment'] malicioso ('../../config.php') poderia ler arquivos do sistema.
+$allowedDirs = [
+    realpath(dirname(__DIR__, 2) . '/storage/leaves'),
+    realpath(__DIR__ . '/../attachments/leaves'),
+];
+$allowedDirs = array_filter($allowedDirs); // remove diretórios inexistentes
+
+$attachmentPath = dirname(__DIR__, 2) . '/storage/leaves/' . $leave['attachment'];
+if (!file_exists($attachmentPath)) {
+    $attachmentPath = __DIR__ . '/../attachments/leaves/' . $leave['attachment'];
+}
 
 if (!file_exists($attachmentPath)) {
     http_response_code(404);
     exit('Arquivo não encontrado no servidor');
+}
+
+// Validação anti path-traversal: o caminho resolvido precisa começar com um dos dirs permitidos.
+$resolvedPath = realpath($attachmentPath);
+$pathOk = false;
+if ($resolvedPath !== false) {
+    foreach ($allowedDirs as $dir) {
+        if (strpos($resolvedPath, $dir . DIRECTORY_SEPARATOR) === 0 || $resolvedPath === $dir) {
+            $pathOk = true;
+            break;
+        }
+    }
+}
+if (!$pathOk) {
+    error_log("[view_leave_attachment] Path traversal tentado: leave_id={$leaveId} path=" . ($resolvedPath ?: 'unresolved'));
+    http_response_code(403);
+    exit('Acesso negado');
 }
 
 // Registra acesso no log de auditoria (LGPD)

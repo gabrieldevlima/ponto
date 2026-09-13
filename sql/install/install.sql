@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS schools (
 CREATE TABLE IF NOT EXISTS admins (
   id INT AUTO_INCREMENT PRIMARY KEY,
   username VARCHAR(100) UNIQUE NOT NULL,
+  cpf VARCHAR(11) UNIQUE NULL,
   password_hash VARCHAR(255) NOT NULL,
   role ENUM('network_admin','school_admin') NOT NULL DEFAULT 'network_admin',
   school_id INT NULL,
@@ -57,7 +58,6 @@ CREATE TABLE IF NOT EXISTS teachers (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
   cpf VARCHAR(14) NOT NULL UNIQUE,
-  pin_hash VARCHAR(255) NOT NULL,
   email VARCHAR(120),
   active TINYINT(1) NOT NULL DEFAULT 1,
   type_id INT NULL,
@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS collaborator_time_schedules (
   weekday TINYINT(1) NOT NULL,
   start_time TIME NULL,
   end_time TIME NULL,
+  end_next_day TINYINT(1) NOT NULL DEFAULT 0, -- 1 = end_time se refere ao dia seguinte (turnos noturnos, ex: 18h -> 06h)
   break_minutes INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
@@ -134,6 +135,26 @@ CREATE TABLE IF NOT EXISTS attendance (
   manual_reason_text VARCHAR(255) NULL,
   manual_by_admin_id INT NULL,
   manual_created_at DATETIME NULL,
+  -- Portaria MTP 671/2021
+  nsr BIGINT UNSIGNED NULL UNIQUE,
+  record_mode ENUM('online','offline') NOT NULL DEFAULT 'online',
+  recorded_at DATETIME NULL,
+  synced_at DATETIME NULL,
+  hlb_sync_status ENUM('synced','failed','pending','legacy') NOT NULL DEFAULT 'pending',
+  hlb_offset_seconds INT DEFAULT 0,
+  device_identifier VARCHAR(255) NULL,
+  receipt_generated TINYINT(1) DEFAULT 0,
+  receipt_viewed_at TIMESTAMP NULL,
+  -- Anti-fraude
+  fraud_risk_level TINYINT DEFAULT 0,
+  gps_mock_detected TINYINT(1) DEFAULT 0,
+  device_fingerprint VARCHAR(255) NULL,
+  pending_reasons TEXT NULL COMMENT 'Motivos JSON quando ponto fica pendente',
+  -- Grade horária / hora extra
+  class_period_id INT NULL,
+  sequence_number INT NOT NULL DEFAULT 1,
+  is_overtime_candidate TINYINT(1) NOT NULL DEFAULT 0,
+  overtime_justification TEXT NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_att_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id),
   CONSTRAINT fk_att_manual_reason FOREIGN KEY (manual_reason_id) REFERENCES manual_reasons(id),
@@ -146,6 +167,12 @@ CREATE INDEX idx_attendance_manual ON attendance(manual_reason_id, manual_by_adm
 CREATE INDEX idx_attendance_school ON attendance(school_id);
 CREATE INDEX idx_attendance_approved ON attendance(approved);
 CREATE INDEX idx_attendance_date ON attendance(date);
+CREATE INDEX idx_attendance_nsr ON attendance(nsr);
+CREATE INDEX idx_attendance_teacher_date_seq ON attendance(teacher_id, date, sequence_number);
+CREATE INDEX idx_attendance_period ON attendance(class_period_id);
+CREATE INDEX idx_attendance_overtime_candidate ON attendance(is_overtime_candidate, approved);
+CREATE INDEX idx_attendance_fraud_risk ON attendance(fraud_risk_level);
+CREATE INDEX idx_attendance_device_fp ON attendance(device_fingerprint);
 
 -- =========================================
 -- Leaves / Absences
@@ -255,6 +282,24 @@ CREATE INDEX idx_audit_entity ON audit_logs(entity, entity_id);
 CREATE INDEX idx_audit_admin ON audit_logs(admin_id);
 CREATE INDEX idx_audit_created ON audit_logs(created_at);
 
+-- Tentativas de autenticação (PIN/face) para rate limiting e auditoria
+CREATE TABLE IF NOT EXISTS auth_attempt_logs (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  attempt_type VARCHAR(32) NOT NULL,
+  identifier VARCHAR(191) NOT NULL,
+  teacher_id INT NULL,
+  ip_address VARCHAR(64) NULL,
+  user_agent VARCHAR(255) NULL,
+  success TINYINT(1) NOT NULL DEFAULT 0,
+  reason VARCHAR(100) NULL,
+  details TEXT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_auth_attempt_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_auth_attempt_lookup ON auth_attempt_logs(attempt_type, identifier, success, created_at);
+CREATE INDEX idx_auth_attempt_created ON auth_attempt_logs(created_at);
+
 -- =========================================
 -- Settings and permissions
 -- =========================================
@@ -307,7 +352,8 @@ INSERT IGNORE INTO leave_types (id, name, code, paid, affects_bank, active) VALU
   (3, 'Férias', 'FERIAS', 1, 0, 1),
   (4, 'Licença', 'LICENCA', 1, 0, 1);
 
--- Note: Default admin creation (username 'admin' with a password) should be handled by application logic
--- to ensure hashing (see ensure_default_admin in the app). This script intentionally does not insert a plaintext password.
+-- Admin padrão (CPF 000.000.000-00, senha admin123 — ALTERAR após primeiro acesso!)
+INSERT IGNORE INTO admins (username, cpf, password_hash, role) VALUES
+('admin', '00000000000', '$2y$10$Yf3IrInDQp7patjgPNmWCuNHp7CjXNGTVYS2Y6TuMcngP3/vLQiiq', 'network_admin');
 
 -- EOF

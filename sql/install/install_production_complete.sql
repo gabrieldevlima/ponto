@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS schools (
 CREATE TABLE IF NOT EXISTS admins (
   id INT AUTO_INCREMENT PRIMARY KEY,
   username VARCHAR(100) UNIQUE NOT NULL,
+  cpf VARCHAR(11) UNIQUE NULL,
   password_hash VARCHAR(255) NOT NULL,
   role ENUM('network_admin','school_admin') NOT NULL DEFAULT 'network_admin',
   school_id INT NULL,
@@ -62,7 +63,6 @@ CREATE TABLE IF NOT EXISTS teachers (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
   cpf VARCHAR(14) NOT NULL UNIQUE,
-  pin_hash VARCHAR(255) NOT NULL,
   email VARCHAR(120),
   active TINYINT(1) NOT NULL DEFAULT 1,
   type_id INT NULL,
@@ -392,19 +392,28 @@ CREATE TABLE IF NOT EXISTS lgpd_consent (
 
 CREATE INDEX IF NOT EXISTS idx_consent_teacher ON lgpd_consent(teacher_id);
 
--- Trigger para NSR automático
-DELIMITER //
+-- ============================================================================
+-- NOTA (auditoria de conformidade 2026-08-05) — trigger de NSR REMOVIDO daqui.
+--
+-- O trigger `attendance_before_insert_nsr` existia neste instalador mas NÃO
+-- existe no banco de produção (a verificação encontrou zero triggers). Na
+-- prática o NSR sempre foi emitido pelo PHP, com `SELECT current_nsr FROM
+-- nsr_sequence WHERE id = 1 FOR UPDATE` dentro da transação do INSERT
+-- (api/checkin.php, api/checkin_bulk.php, api/kiosk_checkin.php,
+-- public/admin/attendance_manual.php e helpers.php).
+--
+-- Manter o trigger aqui é perigoso: quem reimportasse este arquivo passaria a
+-- ter DUAS fontes incrementando `nsr_sequence` — o trigger e o PHP — gerando
+-- saltos e duplicidades de NSR. E ele conflita frontalmente com o livro fiscal
+-- append-only (`nsr_ledger`) previsto na Fase 1 de
+-- docs/AUDITORIA_CONFORMIDADE_2026-08-05.md, que passa a ser a única autoridade
+-- de numeração.
+--
+-- Se o trigger existir em algum ambiente, remova-o:
+--     DROP TRIGGER IF EXISTS attendance_before_insert_nsr;
+-- ============================================================================
 
-DROP TRIGGER IF EXISTS attendance_before_insert_nsr//
-CREATE TRIGGER attendance_before_insert_nsr
-BEFORE INSERT ON attendance
-FOR EACH ROW
-BEGIN
-  IF NEW.nsr IS NULL THEN
-    UPDATE nsr_sequence SET current_nsr = current_nsr + 1 WHERE id = 1;
-    SET NEW.nsr = (SELECT current_nsr FROM nsr_sequence WHERE id = 1);
-  END IF;
-END//
+DELIMITER //
 
 DROP TRIGGER IF EXISTS attendance_update_audit//
 CREATE TRIGGER attendance_update_audit
@@ -450,6 +459,23 @@ CREATE INDEX IF NOT EXISTS idx_fraud_log_teacher ON fraud_detection_log(teacher_
 CREATE INDEX IF NOT EXISTS idx_fraud_log_type ON fraud_detection_log(detection_type);
 CREATE INDEX IF NOT EXISTS idx_fraud_log_risk ON fraud_detection_log(risk_level);
 CREATE INDEX IF NOT EXISTS idx_fraud_log_created ON fraud_detection_log(created_at);
+
+CREATE TABLE IF NOT EXISTS auth_attempt_logs (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  attempt_type VARCHAR(32) NOT NULL,
+  identifier VARCHAR(191) NOT NULL,
+  teacher_id INT NULL,
+  ip_address VARCHAR(64) NULL,
+  user_agent VARCHAR(255) NULL,
+  success TINYINT(1) NOT NULL DEFAULT 0,
+  reason VARCHAR(100) NULL,
+  details TEXT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_auth_attempt_teacher FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX IF NOT EXISTS idx_auth_attempt_lookup ON auth_attempt_logs(attempt_type, identifier, success, created_at);
+CREATE INDEX IF NOT EXISTS idx_auth_attempt_created ON auth_attempt_logs(created_at);
 
 CREATE TABLE IF NOT EXISTS antifraud_config (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -683,24 +709,17 @@ BEGIN
     SELECT base_salary INTO v_base_salary FROM teachers WHERE id = p_teacher_id;
     IF v_base_salary IS NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Colaborador não encontrado'; END IF;
     
-    -- Valores exemplo (implementar lógica real conforme necessário)
-    SET v_worked_minutes = 9600;
-    SET v_expected_minutes = 9600;
-    
-    IF v_worked_minutes > v_expected_minutes THEN
-        SET v_overtime_minutes = v_worked_minutes - v_expected_minutes;
-        SET v_deficit_minutes = 0;
-    ELSE
-        SET v_overtime_minutes = 0;
-        SET v_deficit_minutes = v_expected_minutes - v_worked_minutes;
-    END IF;
-    
-    IF v_expected_minutes > 0 THEN SET v_minute_value = v_base_salary / v_expected_minutes; ELSE SET v_minute_value = 0; END IF;
-    
-    SET v_overtime_value = ROUND(v_overtime_minutes * v_minute_value * 1.5, 2);
-    SET v_discount_value = ROUND(v_deficit_minutes * v_minute_value, 2);
-    SET v_gross_total = v_base_salary + v_overtime_value;
-    SET v_net_total = v_gross_total - v_discount_value;
+    -- A instituição NÃO paga hora extra nem desconta déficit automaticamente.
+    -- Holerite = salário base; extras/déficit zerados; horas informativas não calculadas aqui.
+    SET v_worked_minutes = 0;
+    SET v_expected_minutes = 0;
+    SET v_overtime_minutes = 0;
+    SET v_deficit_minutes = 0;
+    SET v_minute_value = 0;
+    SET v_overtime_value = 0;
+    SET v_discount_value = 0;
+    SET v_gross_total = v_base_salary;
+    SET v_net_total = v_base_salary;
     
     INSERT INTO payslips (teacher_id, reference_month, base_salary, worked_minutes, expected_minutes, overtime_minutes,
         overtime_value, deficit_minutes, discount_value, gross_total, net_total, generated_by_admin_id)
@@ -759,8 +778,8 @@ INSERT IGNORE INTO app_settings (k, v) VALUES
 
 -- Admin padrão (senha: admin123 - ALTERAR!)
 -- Hash gerado e testado localmente: password_hash('admin123', PASSWORD_BCRYPT)
-INSERT IGNORE INTO admins (username, password_hash, role) VALUES
-('admin', '$2y$10$Yf3IrInDQp7patjgPNmWCuNHp7CjXNGTVYS2Y6TuMcngP3/vLQiiq', 'network_admin');
+INSERT IGNORE INTO admins (username, cpf, password_hash, role) VALUES
+('admin', '00000000191', '$2y$10$Yf3IrInDQp7patjgPNmWCuNHp7CjXNGTVYS2Y6TuMcngP3/vLQiiq', 'network_admin');
 
 -- =====================================================================
 -- PARTE 8: VIEWS AUXILIARES

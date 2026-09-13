@@ -5,7 +5,7 @@ $pdo = db();
 $adm = current_admin($pdo);
 if (!is_network_admin($adm)) {
   http_response_code(403);
-  exit('Acesso restrito a administradores da rede.');
+  flash_redirect('error', 'Acesso restrito a administradores da rede.', 'dashboard.php');
 }
 
 $msg = $_GET['msg'] ?? '';
@@ -33,6 +33,7 @@ $rows = $st->fetchAll(PDO::FETCH_ASSOC);
   <title>Instituições | DEEDO Ponto</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="css/admin.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
   <link rel="shortcut icon" href="../img/icone-2.ico" type="image/x-icon">
   <link rel="icon" href="../img/icone-2.ico" type="image/x-icon">
@@ -42,71 +43,84 @@ $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 <body>
   <?php include __DIR__ . '/_navbar.php'; ?>
   <div class="container-fluid">
-    <div class="card rounded-3 border bg-body mb-4">
-      <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
-        <div class="d-flex align-items-center gap-3">
-          <div class="bg-primary-subtle text-primary rounded-circle d-inline-flex align-items-center justify-content-center" style="width:3rem;height:3rem;">
-            <i class="bi bi-building fs-4"></i>
-          </div>
-          <div>
-            <h3 class="mb-0">Instituições</h3>
-            <p class="text-muted mb-0">Gerencie as instituições da rede: crie, edite e pesquise instituições cadastradas.</p>
-          </div>
-        </div>
-        <div class="d-flex align-items-center gap-2">
-          <a href="school_edit.php" class="btn btn-success">
-            <i class="bi bi-plus-circle"></i>
-            <span class="d-none d-sm-inline">Nova Instituição</span>
-            <span class="d-inline d-sm-none">Novo</span>
-          </a>
+    <div class="app-page-header">
+      <div class="app-page-header__main">
+        <div class="app-page-icon"><i class="bi bi-building"></i></div>
+        <div>
+          <h1 class="app-page-title">Instituições</h1>
+          <p class="app-page-subtitle">Gerencie as instituições da rede: crie, edite e pesquise instituições cadastradas.</p>
         </div>
       </div>
+      <a href="school_edit.php" class="btn btn-success" aria-label="Cadastrar nova instituição">
+        <i class="bi bi-plus-circle me-1"></i>
+        <span class="d-none d-sm-inline">Nova Instituição</span>
+        <span class="d-inline d-sm-none">Novo</span>
+      </a>
     </div>
     <?php if ($msg): ?>
-      <div class="alert alert-success alert-dismissible fade show" role="alert">
-        <?= esc($msg) ?>
+      <div class="alert alert-success alert-dismissible fade show d-flex align-items-center gap-2" role="alert">
+        <i class="bi bi-check-circle-fill"></i>
+        <div class="flex-grow-1"><?= esc($msg) ?></div>
         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Fechar"></button>
       </div>
     <?php endif; ?>
 
-    <form class="row g-2 align-items-center mb-3" method="get" autocomplete="off" role="search">
-      <div class="col-md-6 col-lg-5">
-        <div class="input-group">
-          <span class="input-group-text"><i class="bi bi-search"></i></span>
-          <input type="text" class="form-control" name="q" placeholder="Buscar por nome ou código" value="<?= esc($q) ?>" aria-label="Buscar instituições">
+    <form class="app-filter-card" method="get" autocomplete="off" role="search">
+      <div class="row g-3 align-items-end">
+        <div class="col-12 col-md-7 col-lg-6">
+          <label for="q" class="form-label small fw-semibold">Buscar instituição</label>
+          <div class="input-group">
+            <span class="input-group-text"><i class="bi bi-search"></i></span>
+            <input type="text" id="q" class="form-control" name="q" placeholder="Nome ou código (ex: EMEF-CENTRO)" value="<?= esc($q) ?>" aria-label="Buscar instituições">
+          </div>
         </div>
-      </div>
-      <div class="col-auto">
-        <div class="btn-group">
-          <button type="submit" class="btn btn-primary">Filtrar</button>
-          <a class="btn btn-outline-secondary" href="schools.php">Limpar</a>
+        <div class="col-12 col-md-5 col-lg-3 d-flex gap-2 flex-wrap">
+          <button type="submit" class="btn btn-primary flex-grow-1">
+            <i class="bi bi-funnel me-1"></i>Filtrar
+          </button>
+          <a class="btn btn-outline-secondary" href="schools.php" aria-label="Limpar filtros">
+            <i class="bi bi-x-circle"></i>
+          </a>
         </div>
       </div>
     </form>
 
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span class="fw-semibold"><i class="bi bi-building me-1"></i>Lista de Instituições</span>
-        <span class="text-muted small"><?= count($rows) ?> resultado(s)</span>
+    <div class="app-section-card app-table-card">
+      <div class="app-section-card__header">
+        <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-list-ul"></i>Instituições</span>
+        <h2 class="app-section-card__title">Cadastradas</h2>
+        <span class="app-section-card__hint"><?= count($rows) ?> resultado(s)</span>
       </div>
       <div class="table-responsive">
-        <table class="table table-hover table-bordered align-middle mb-0">
-          <thead class="table-light">
+        <table class="table align-middle mb-0">
+          <thead>
             <tr>
-              <th>Nome</th>
-              <th>Código</th>
-              <th>Status</th>
-              <th style="width:160px;">Ações</th>
+              <th scope="col">Nome</th>
+              <th scope="col" style="width:160px;">Código</th>
+              <th scope="col" style="width:120px;">Status</th>
+              <th scope="col" class="text-end" style="width:120px;">Ações</th>
             </tr>
           </thead>
           <tbody>
             <?php foreach ($rows as $r): ?>
               <tr>
-                <td><?= esc($r['name']) ?></td>
-                <td class="text-center"><code><?= esc($r['code']) ?></code></td>
-                <td class="text-center"><?= (int)$r['active'] === 1 ? '<span class="badge bg-success rounded-pill">Ativa</span>' : '<span class="badge bg-secondary rounded-pill">Inativa</span>' ?></td>
-                <td class="text-center">
-                  <a class="btn btn-sm btn-outline-primary" href="school_edit.php?id=<?= (int)$r['id'] ?>">
+                <td>
+                  <div class="fw-semibold text-dark"><?= esc(mb_convert_case($r['name'] ?? '', MB_CASE_TITLE, 'UTF-8')) ?></div>
+                </td>
+                <td><code class="text-muted"><?= esc($r['code']) ?></code></td>
+                <td>
+                  <?php if ((int)$r['active'] === 1): ?>
+                    <span class="badge text-bg-success-subtle border border-success-subtle text-success-emphasis">
+                      <i class="bi bi-check-circle me-1"></i>Ativa
+                    </span>
+                  <?php else: ?>
+                    <span class="badge text-bg-secondary-subtle border border-secondary-subtle text-secondary-emphasis">
+                      <i class="bi bi-pause-circle me-1"></i>Inativa
+                    </span>
+                  <?php endif; ?>
+                </td>
+                <td class="text-end">
+                  <a class="btn btn-sm btn-outline-primary" href="school_edit.php?id=<?= (int)$r['id'] ?>" aria-label="Editar instituição <?= esc($r['name']) ?>">
                     <i class="bi bi-pencil-square me-1"></i>Editar
                   </a>
                 </td>
@@ -114,19 +128,25 @@ $rows = $st->fetchAll(PDO::FETCH_ASSOC);
             <?php endforeach; ?>
             <?php if (empty($rows)): ?>
               <tr>
-                <td colspan="4" class="text-center text-muted">Nenhuma instituição cadastrada.</td>
+                <td colspan="4" class="text-center py-5">
+                  <div class="text-muted">
+                    <i class="bi bi-building-slash fs-1 d-block mb-2 opacity-50"></i>
+                    <strong>Nenhuma instituição encontrada.</strong>
+                    <?php if ($q): ?>
+                      <div class="small mt-1">Tente ajustar a busca ou <a href="schools.php">limpar o filtro</a>.</div>
+                    <?php else: ?>
+                      <div class="small mt-1">Comece criando uma <a href="school_edit.php">nova instituição</a>.</div>
+                    <?php endif; ?>
+                  </div>
+                </td>
               </tr>
             <?php endif; ?>
           </tbody>
         </table>
       </div>
     </div>
-    <div class="text-center my-5">
-      <a href="dashboard.php" class="btn btn-outline-primary rounded-pill px-4 py-2 shadow-sm">
-        <i class="bi bi-arrow-left-circle me-2"></i> Voltar ao Painel
-      </a>
-    </div>
   </div>
+    <?php include __DIR__ . '/../_footer.php'; ?>
 </body>
 
 </html>

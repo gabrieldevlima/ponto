@@ -237,15 +237,13 @@ CREATE TABLE IF NOT EXISTS payslip_items (
 
 DELIMITER //
 
+-- Trigger de NSR REMOVIDO (auditoria 2026-08-05): o NSR é emitido pelo PHP
+-- (SELECT ... FOR UPDATE em nsr_sequence, na mesma transação do INSERT) e, a
+-- partir da Fase 1 de docs/AUDITORIA_CONFORMIDADE_2026-08-05.md, pelo livro
+-- fiscal `nsr_ledger`. Duas fontes incrementando a sequência geram saltos e
+-- duplicidade de NSR. Para limpar um ambiente:
+--     DROP TRIGGER IF EXISTS attendance_before_insert_nsr;
 DROP TRIGGER IF EXISTS attendance_before_insert_nsr//
-CREATE TRIGGER attendance_before_insert_nsr
-BEFORE INSERT ON attendance FOR EACH ROW
-BEGIN
-  IF NEW.nsr IS NULL THEN
-    UPDATE nsr_sequence SET current_nsr = current_nsr + 1 WHERE id = 1;
-    SET NEW.nsr = (SELECT current_nsr FROM nsr_sequence WHERE id = 1);
-  END IF;
-END//
 
 DROP TRIGGER IF EXISTS attendance_update_audit//
 CREATE TRIGGER attendance_update_audit

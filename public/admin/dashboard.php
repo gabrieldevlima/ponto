@@ -31,11 +31,10 @@ $pendingToday = 0;
 $absentToday = 0;
 $workingNow = 0;
 $leavesActive = 0;
-$extraCost = 0;
+$toCompensateMin = 0;
 $workingNowList = [];
 $absentList = [];
 $presenceLast30Days = [];
-$overtimeLast12Months = [];
 $schoolComparison = [];
 $topLeaveTypes = [];
 $checkinHeatmap = array_fill(0, 7, array_fill(0, 24, 0));
@@ -105,7 +104,9 @@ $stPend = $pdo->prepare("
 $stPend->execute(array_merge([$today], $paramsTeacher));
 $pendingToday = (int)$stPend->fetchColumn();
 
-// Ausentes (esperados mas SEM attendance nenhum OU rejeitado)
+// Ausentes (esperados mas SEM attendance nenhum OU rejeitado).
+// Exceção: colaborador em jornada noturna ainda aberta (entrou ontem, sai hoje)
+// NÃO é "ausente" — exclui via EXISTS de qualquer registro aberto.
 $stAbs = $pdo->prepare("
   SELECT COUNT(DISTINCT t.id)
   FROM teachers t
@@ -115,38 +116,41 @@ $stAbs = $pdo->prepare("
       OR EXISTS (SELECT 1 FROM collaborator_time_schedules ts WHERE ts.teacher_id=t.id AND ts.weekday=? AND ts.start_time IS NOT NULL AND ts.end_time IS NOT NULL)
     )
     AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.teacher_id=t.id AND a.date=? AND (a.approved IS NULL OR a.approved IN (0,1)))
+    AND NOT EXISTS (SELECT 1 FROM attendance a2 WHERE a2.teacher_id=t.id AND a2.check_in IS NOT NULL AND a2.check_out IS NULL AND " . attendance_vigente_sql('a2') . ")
 ");
 $stAbs->execute(array_merge($paramsTeacher, [$weekday, $weekday, $today]));
 $absentToday = (int)$stAbs->fetchColumn();
 
-// Trabalhando agora (check-in feito, check-out ainda não)
+// Trabalhando agora (check-in feito, check-out ainda não) — sem filtro de date
+// para incluir turnos noturnos em curso (entrada de ontem).
 $stWorking = $pdo->prepare("
   SELECT COUNT(DISTINCT a.teacher_id)
   FROM attendance a
   JOIN teachers t ON t.id=a.teacher_id
-  WHERE a.date=? 
-    AND a.check_in IS NOT NULL 
+  WHERE a.check_in IS NOT NULL
     AND a.check_out IS NULL
+    AND " . attendance_vigente_sql('a') . "
     AND $whereTeacher
 ");
-$stWorking->execute(array_merge([$today], $paramsTeacher));
+$stWorking->execute($paramsTeacher);
 $workingNow = (int)$stWorking->fetchColumn();
 
 // Lista de nomes dos colaboradores trabalhando agora com cargo, escola e localização
+// (inclui turnos noturnos: entrada de ontem ainda aberta).
 $stWorkingList = $pdo->prepare("
-  SELECT DISTINCT t.id, t.name, a.check_in, ct.name as type_name, s.name as school_name, 
+  SELECT DISTINCT t.id, t.name, a.check_in, ct.name as type_name, s.name as school_name,
          a.check_in_lat, a.check_in_lng
   FROM attendance a
   JOIN teachers t ON t.id=a.teacher_id
   LEFT JOIN collaborator_types ct ON ct.id = t.type_id
   LEFT JOIN schools s ON s.id = a.school_id
-  WHERE a.date=? 
-    AND a.check_in IS NOT NULL 
+  WHERE a.check_in IS NOT NULL
     AND a.check_out IS NULL
+    AND " . attendance_vigente_sql('a') . "
     AND $whereTeacher
   ORDER BY t.name
 ");
-$stWorkingList->execute(array_merge([$today], $paramsTeacher));
+$stWorkingList->execute($paramsTeacher);
 $workingNowList = $stWorkingList->fetchAll(PDO::FETCH_ASSOC);
 
 // Lista de colaboradores ausentes hoje (esperados mas sem registro)
@@ -168,13 +172,24 @@ $stAbsentList = $pdo->prepare("
     )
     AND NOT EXISTS (
       SELECT 1 FROM leaves l
-      WHERE l.teacher_id = t.id AND l.approved = 1 AND ? BETWEEN l.start_date AND l.end_date
+      WHERE l.teacher_id = t.id AND l.approved = 1 AND l.excuses_absence = 1 AND ? BETWEEN l.start_date AND l.end_date
     )
   GROUP BY t.id, t.name, ct.name
   ORDER BY t.name
 ");
 $stAbsentList->execute(array_merge($paramsTeacher, [$weekday, $weekday, $today, $today]));
 $absentList = $stAbsentList->fetchAll(PDO::FETCH_ASSOC);
+
+// Guarda de início de contagem: antes da data global o sistema não conta presenças/faltas.
+$countingStart = counting_start_date();
+$countingNotStarted = ($countingStart !== null && $today < $countingStart);
+if ($countingNotStarted) {
+    $expectedToday = 0;
+    $presentToday  = 0;
+    $pendingToday  = 0;
+    $absentToday   = 0;
+    $absentList    = [];
+}
 
 // Afastados ativos hoje
 $stAf = $pdo->prepare("
@@ -187,84 +202,77 @@ $stAf = $pdo->prepare("
 $stAf->execute(array_merge([$today], $paramsTeacher));
 $leavesActive = (int)$stAf->fetchColumn();
 
-// Custos com horas extras no mês (aproximação usando salário/expected)
+// Horas a compensar no mês (informativo): quanto, somando os colaboradores, ainda
+// falta para a carga horária prevista. Sem linguagem de hora extra / saldo negativo.
 $month = date('Y-m');
 $monthStart = $month . '-01';
 $monthEnd = date('Y-m-t', strtotime($monthStart));
-$extraCost = 0.0;
+$toCompensateMin = 0;
+$compTolerance = (int)(get_setting('tolerance_minutes', '5') ?? '5');
 
-// ======================================================================
-// ESTATÍSTICAS DE ARMAZENAMENTO DE FOTOS
-// ======================================================================
-$photoStorageUsed = 0;
-$photoStorageUsedMB = 0;
-$totalPhotoCount = 0;
-$deletedPhotoCount = 0;
-$deletedPhotoCountLast30 = 0;
-
-try {
-    $photosDir = __DIR__ . '/../../public/photos/';
-    $photoStorageUsed = get_directory_size($photosDir);
-    $photoStorageUsedMB = round($photoStorageUsed / 1024 / 1024, 2);
-    
-    $stmt = $pdo->query("SELECT COUNT(*) FROM attendance WHERE photo IS NOT NULL AND photo != '' AND photo_deleted = 0");
-    $totalPhotoCount = (int)$stmt->fetchColumn();
-    
-    $stmt = $pdo->query("SELECT COUNT(*) FROM attendance WHERE photo_deleted = 1");
-    $deletedPhotoCount = (int)$stmt->fetchColumn();
-    
-    $stmt = $pdo->query("SELECT COUNT(*) FROM attendance WHERE photo_deleted = 1 AND photo_deleted_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)");
-    $deletedPhotoCountLast30 = (int)$stmt->fetchColumn();
-} catch (Throwable $e) {
-    error_log("Dashboard photo stats error: " . $e->getMessage());
+// HOTFIX 2026-09 (desempenho): este bloco fazia ~9.700 consultas por abertura do
+// dashboard (colaboradores × dias do mês × 3). A FÓRMULA NÃO MUDOU — as jornadas
+// agora são lidas uma vez por colaborador (antes: uma consulta por dia) e o
+// total fica em cache por 10 minutos por mês/escopo de admin. Métrica
+// informativa; a atualização em até 10 min é aceitável.
+$__dashCacheFile = __DIR__ . '/../../logs/.cache_dash_compensate_' . md5($month . '|' . $whereTeacher . '|' . json_encode($paramsTeacher)) . '.json';
+$__dashCached = null;
+if (is_readable($__dashCacheFile) && (time() - (int)@filemtime($__dashCacheFile)) < 600) {
+  $__dashCached = json_decode((string)@file_get_contents($__dashCacheFile), true);
 }
-
-// Para simplificar KPI, calcula por colaborador de forma agregada (cuidado: pode custar performance em bases grandes)
+if (is_array($__dashCached) && isset($__dashCached['to_compensate_min'])) {
+  $toCompensateMin = (int)$__dashCached['to_compensate_min'];
+  $teachersList = [];
+} else {
+// Calcula por colaborador de forma agregada (cuidado: pode custar performance em bases grandes)
 $stList = $pdo->prepare("SELECT t.id, t.base_salary, ct.schedule_mode FROM teachers t LEFT JOIN collaborator_types ct ON ct.id=t.type_id WHERE $whereTeacher");
 $stList->execute($paramsTeacher);
 $teachersList = $stList->fetchAll(PDO::FETCH_ASSOC);
+$stSchedClasses = $pdo->prepare("SELECT weekday, classes_count, class_minutes FROM teacher_schedules WHERE teacher_id=?");
+$stSchedTime    = $pdo->prepare("SELECT weekday, start_time, end_time, end_next_day, break_minutes FROM collaborator_time_schedules WHERE teacher_id=?");
 foreach ($teachersList as $trow) {
   $tid = (int)$trow['id'];
   $mode = $trow['schedule_mode'] ?? 'classes';
+  // Jornadas do colaborador indexadas por dia da semana (1ª linha por weekday,
+  // equivalente ao fetch() único da consulta anterior).
+  $schedByWeekday = [];
+  $stSched = ($mode === 'classes') ? $stSchedClasses : $stSchedTime;
+  $stSched->execute([$tid]);
+  foreach ($stSched->fetchAll(PDO::FETCH_ASSOC) as $schedRow) {
+    $wk = (int)$schedRow['weekday'];
+    if (!isset($schedByWeekday[$wk])) $schedByWeekday[$wk] = $schedRow;
+  }
   // expected total no mês
   $expected = 0;
   for ($d = new DateTime($monthStart); $d <= new DateTime($monthEnd); $d->modify('+1 day')) {
     $w = (int)$d->format('w');
     if ($mode === 'classes') {
-      $stS = $pdo->prepare("SELECT classes_count, class_minutes FROM teacher_schedules WHERE teacher_id=? AND weekday=?");
-      $stS->execute([$tid, $w]);
-      if ($sc = $stS->fetch(PDO::FETCH_ASSOC)) $expected += ((int)$sc['classes_count'] * (int)$sc['class_minutes']);
+      if ($sc = ($schedByWeekday[$w] ?? null)) $expected += ((int)$sc['classes_count'] * (int)$sc['class_minutes']);
     } else {
-      $stS = $pdo->prepare("SELECT start_time,end_time,break_minutes FROM collaborator_time_schedules WHERE teacher_id=? AND weekday=?");
-      $stS->execute([$tid, $w]);
-      if ($ts = $stS->fetch(PDO::FETCH_ASSOC)) {
-        if (!empty($ts['start_time']) && !empty($ts['end_time'])) {
-          $s = DateTime::createFromFormat('H:i:s', $ts['start_time']);
-          $e = DateTime::createFromFormat('H:i:s', $ts['end_time']);
-          if ($s && $e) {
-            if ($e <= $s) $e = (clone $e)->modify('+1 day');
-            $expected += max(0, (int)(($e->getTimestamp() - $s->getTimestamp()) / 60) - (int)$ts['break_minutes']);
-          }
+      if ($ts = ($schedByWeekday[$w] ?? null)) {
+        $win = compute_schedule_window($ts, $d->format('Y-m-d'));
+        if ($win) {
+          // Janela completa — break_minutes não é descontado (intervalo conta
+          // como tempo trabalhado; modelo "cheio vs cheio").
+          $expected += max(0, (int)(($win['end']->getTimestamp() - $win['start']->getTimestamp()) / 60));
         }
       }
     }
   }
-  // worked total
-  $stW = $pdo->prepare("SELECT check_in, check_out FROM attendance WHERE teacher_id=? AND date BETWEEN ? AND ?");
-  $stW->execute([$tid, $monthStart, $monthEnd]);
+  // Trabalhado EFETIVO por dia (presença cheia: work + break — helpers.php).
   $worked = 0;
-  while ($r = $stW->fetch(PDO::FETCH_ASSOC)) {
-    if ($r['check_in'] && $r['check_out']) {
-      $ci = new DateTime($r['check_in']);
-      $co = new DateTime($r['check_out']);
-      if ($co > $ci) $worked += (int)(($co->getTimestamp() - $ci->getTimestamp()) / 60);
-    }
+  $cursor = new DateTime($monthStart);
+  $endDt  = new DateTime($monthEnd);
+  while ($cursor <= $endDt) {
+    $worked += calculate_effective_worked_minutes($pdo, (int)$tid, $cursor->format('Y-m-d'));
+    $cursor = $cursor->modify('+1 day');
   }
   $delta = $worked - $expected;
-  if ($expected > 0 && $delta > 0) {
-    $minuteValue = ((float)$trow['base_salary'] / (float)$expected);
-    $extraCost += $delta * $minuteValue * 1.5;
+  if ($expected > 0 && $delta < 0 && abs($delta) > $compTolerance) {
+    $toCompensateMin += -$delta;
   }
+}
+  @file_put_contents($__dashCacheFile, json_encode(['to_compensate_min' => $toCompensateMin, 'at' => time()]), LOCK_EX);
 }
 
 // ============================================================================
@@ -295,40 +303,6 @@ try {
         $presenceLast30Days[] = [
             'date' => date('d/m', strtotime("-$i days")),
             'count' => 0
-        ];
-    }
-}
-
-// 2. Horas Extras por Mês - Últimos 12 meses (com proteção de collation)
-$overtimeLast12Months = [];
-try {
-    for ($i = 11; $i >= 0; $i--) {
-        $monthDate = date('Y-m', strtotime("-$i months"));
-        $stOT = $pdo->prepare("
-            SELECT SUM(minutes) as total
-            FROM overtime_requests ot
-            JOIN teachers t ON t.id = ot.teacher_id
-            WHERE DATE_FORMAT(ot.date, '%Y-%m') = ? 
-              AND ot.status COLLATE utf8mb4_unicode_ci = 'approved' COLLATE utf8mb4_unicode_ci
-              AND $whereTeacher
-        ");
-        $stOT->execute(array_merge([$monthDate], $paramsTeacher));
-        $totalMin = (int)$stOT->fetchColumn();
-        $overtimeLast12Months[] = [
-            'month' => date('M/y', strtotime($monthDate . '-01')),
-            'minutes' => $totalMin,
-            'hours' => round($totalMin / 60, 1)
-        ];
-    }
-} catch (Throwable $e) {
-    error_log("Dashboard Error (overtime chart): " . $e->getMessage());
-    // Preenche com dados vazios
-    for ($i = 11; $i >= 0; $i--) {
-        $monthDate = date('Y-m', strtotime("-$i months"));
-        $overtimeLast12Months[] = [
-            'month' => date('M/y', strtotime($monthDate . '-01')),
-            'minutes' => 0,
-            'hours' => 0
         ];
     }
 }
@@ -499,8 +473,9 @@ try {
         JOIN teachers t ON t.id = a.teacher_id
         LEFT JOIN collaborator_types ct ON ct.id = t.type_id
         LEFT JOIN schools s ON s.id = a.school_id
-        WHERE a.check_in IS NOT NULL 
+        WHERE a.check_in IS NOT NULL
           AND a.check_out IS NULL
+          AND " . attendance_vigente_sql('a') . "
           AND (
             -- Horário fixo: alertar dias anteriores
             (IFNULL(ct.schedule_mode, 'time') = 'time' AND a.date < CURDATE())
@@ -535,6 +510,7 @@ try {
   <title>Painel do Administrador | DEEDO Ponto</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="css/admin.css">
   <link rel="shortcut icon" href="../img/icone-2.ico" type="image/x-icon">
   <link rel="icon" href="../img/icone-2.ico" type="image/x-icon">
   <style>
@@ -582,6 +558,39 @@ try {
         </div>
       </div>
     </div>
+
+    <?php
+    // Alerta de segurança: verificar se algum admin ainda usa a senha padrão (admin123)
+    try {
+        $stDefaultPwd = $pdo->query("SELECT id, username FROM admins WHERE password_hash IS NOT NULL");
+        $defaultPwdAdmins = [];
+        while ($adm = $stDefaultPwd->fetch(PDO::FETCH_ASSOC)) {
+            // Verificar contra senhas padrão comuns
+            foreach (['admin123', '123456', 'password', 'admin'] as $weakPwd) {
+                if (password_verify($weakPwd, $adm['password_hash'] ?? '')) {
+                    $defaultPwdAdmins[] = $adm['username'];
+                    break;
+                }
+            }
+        }
+        if (!empty($defaultPwdAdmins)):
+    ?>
+    <div class="alert alert-danger d-flex align-items-center mb-4" role="alert">
+      <i class="bi bi-shield-exclamation me-2 fs-4"></i>
+      <div>
+        <strong>Alerta de Segurança:</strong> Os seguintes administradores estão usando senhas fracas/padrão:
+        <strong><?= esc(implode(', ', $defaultPwdAdmins)) ?></strong>.
+        Altere as senhas imediatamente para garantir a segurança do sistema.
+      </div>
+    </div>
+    <?php endif; } catch (Throwable $e) { /* non-critical */ } ?>
+
+    <?php if (!empty($countingNotStarted)): ?>
+    <div class="alert alert-info d-flex align-items-center gap-2">
+        <i class="bi bi-info-circle-fill"></i>
+        <div>A contagem de presenças e faltas inicia em <strong><?= esc(date('d/m/Y', strtotime($countingStart))) ?></strong>. Os números de hoje aparecerão a partir dessa data.</div>
+    </div>
+    <?php endif; ?>
 
     <div class="row g-4">
       <div class="col-12 col-md-3">
@@ -664,10 +673,10 @@ try {
         <div class="card h-100 border-0 shadow-sm card-hover">
           <div class="card-body">
             <div class="text-muted">
-              <i class="bi bi-cash-stack me-1"></i>Custo H. Extras (<?= date('m/Y') ?>)
+              <i class="bi bi-arrow-repeat me-1"></i>Horas a Compensar (<?= date('m/Y') ?>)
             </div>
-            <div class="fs-3 fw-bold">R$ <?= number_format($extraCost, 2, ',', '.') ?></div>
-            <div class="small text-muted">Estimativa mensal</div>
+            <div class="fs-3 fw-bold"><?= intdiv($toCompensateMin, 60) ?>h<?= str_pad((string)($toCompensateMin % 60), 2, '0', STR_PAD_LEFT) ?></div>
+            <div class="small text-muted">Soma do mês (informativo)</div>
           </div>
         </div>
       </div>
@@ -681,49 +690,6 @@ try {
               <?= $forgottenCount ?>
             </div>
             <div class="small text-muted">Registros incompletos</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Photo Storage KPIs -->
-    <div class="row g-4 mt-1">
-      <div class="col-12 col-md-3">
-        <div class="card h-100 border-0 shadow-sm card-hover">
-          <div class="card-body">
-            <div class="text-muted">
-              <i class="bi bi-hdd-stack me-1"></i>Armazenamento
-            </div>
-            <div class="fs-3 fw-bold"><?= $photoStorageUsedMB ?> MB</div>
-            <div class="small text-muted"><?= number_format($totalPhotoCount) ?> fotos ativas</div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-3">
-        <div class="card h-100 border-0 shadow-sm card-hover">
-          <div class="card-body">
-            <div class="text-muted">
-              <i class="bi bi-trash me-1"></i>Fotos Deletadas
-            </div>
-            <div class="fs-3 fw-bold"><?= number_format($deletedPhotoCount) ?></div>
-            <div class="small text-muted"><?= number_format($deletedPhotoCountLast30) ?> nos últimos 30 dias</div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-6">
-        <div class="card h-100 border-0 shadow-sm card-hover border-info border-opacity-25">
-          <div class="card-body d-flex align-items-center justify-content-between">
-            <div>
-              <div class="text-info fw-semibold">
-                <i class="bi bi-gear me-1"></i>Gerenciar Armazenamento
-              </div>
-              <div class="small text-muted mt-1">
-                Configure limpeza automática e libere espaço
-              </div>
-            </div>
-            <a href="photo_cleanup.php" class="btn btn-info">
-              <i class="bi bi-arrow-right-circle"></i> Acessar
-            </a>
           </div>
         </div>
       </div>
@@ -744,12 +710,12 @@ try {
               <table class="table table-hover align-middle">
                 <thead>
                   <tr>
-                    <th>Nome</th>
-                    <th>Cargo</th>
-                    <th>Instituição</th>
-                    <th>Entrada</th>
-                    <th>Tempo Trabalhado</th>
-                    <th>Status</th>
+                    <th scope="col">Nome</th>
+                    <th scope="col">Cargo</th>
+                    <th scope="col">Instituição</th>
+                    <th scope="col">Entrada</th>
+                    <th scope="col">Tempo Trabalhado</th>
+                    <th scope="col">Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -830,14 +796,14 @@ try {
               <table id="forgottenTable" class="table table-hover align-middle">
                 <thead>
                   <tr>
-                    <th>Nome</th>
-                    <th>Tipo</th>
-                    <th>Cargo</th>
-                    <th>Instituição</th>
-                    <th>Data</th>
-                    <th>Entrada</th>
-                    <th>Tempo Decorrido</th>
-                    <th>Ação</th>
+                    <th scope="col">Nome</th>
+                    <th scope="col">Tipo</th>
+                    <th scope="col">Cargo</th>
+                    <th scope="col">Instituição</th>
+                    <th scope="col">Data</th>
+                    <th scope="col">Entrada</th>
+                    <th scope="col">Tempo Decorrido</th>
+                    <th scope="col">Ação</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -928,11 +894,11 @@ try {
               <table id="absentTable" class="table table-hover align-middle">
                 <thead>
                   <tr>
-                    <th>Nome</th>
-                    <th>Cargo</th>
-                    <th>Instituição(ões)</th>
-                    <th>Status</th>
-                    <th>Ação</th>
+                    <th scope="col">Nome</th>
+                    <th scope="col">Cargo</th>
+                    <th scope="col">Instituição(ões)</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Ação</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1003,18 +969,6 @@ try {
         </div>
       </div>
       
-      <!-- Gráfico 3: Horas Extras por Mês (12 meses) -->
-      <div class="col-lg-6">
-        <div class="card shadow-sm">
-          <div class="card-header fw-semibold">
-            <i class="bi bi-bar-chart me-2"></i>Horas Extras Aprovadas - 12 Meses
-          </div>
-          <div class="card-body">
-            <canvas id="chartOvertime12Months" height="200"></canvas>
-          </div>
-        </div>
-      </div>
-      
       <!-- Gráfico 4: Comparativo por Escola -->
       <?php if (is_network_admin($admin) && !empty($schoolComparison)): ?>
       <div class="col-lg-6">
@@ -1080,10 +1034,10 @@ try {
     <footer class="mt-5 mb-4">
       <div class="d-flex flex-column align-items-center gap-3">
         <div class="d-flex justify-content-center align-items-center">
-          <img src="../img/logo_prefeitura.png" alt="Prefeitura Municipal de Ribeira do Piauí" style="height: 100px; width: auto;">
+          <img src="../img/logo_prefeitura.png" alt="Prefeitura Municipal de Oeiras - PI" style="height: 100px; width: auto;">
         </div>
         <div class="text-center text-muted small">
-          <div>Prefeitura Municipal de Ribeira do Piauí - PI</div>
+          <div>Prefeitura Municipal de Oeiras - PI</div>
           <div>&copy; <?= date('Y') ?> DEEDO Sistemas - Sistema de Ponto Eletrônico</div>
         </div>
       </div>
@@ -1160,39 +1114,6 @@ try {
       plugins: [ChartDataLabels]
     });
     
-    // Gráfico 3: Horas Extras por Mês (Barras)
-    const overtimeData = <?= json_encode($overtimeLast12Months) ?>;
-    new Chart(document.getElementById('chartOvertime12Months'), {
-      type: 'bar',
-      data: {
-        labels: overtimeData.map(d => d.month),
-        datasets: [{
-          label: 'Horas Extras',
-          data: overtimeData.map(d => d.hours),
-          backgroundColor: '#0d6efd',
-          borderColor: '#0a58ca',
-          borderWidth: 1
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {display: false},
-          tooltip: {
-            callbacks: {
-              label: function(context) {
-                return 'Horas: ' + context.parsed.y.toFixed(1) + 'h';
-              }
-            }
-          }
-        },
-        scales: {
-          y: {beginAtZero: true}
-        }
-      }
-    });
-    
     <?php if (is_network_admin($admin) && !empty($schoolComparison)): ?>
     // Gráfico 4: Comparativo por Escola (Barras Empilhadas)
     const schoolData = <?= json_encode($schoolComparison) ?>;
@@ -1238,7 +1159,7 @@ try {
         labels: leaveData.map(l => l.name),
         datasets: [{
           data: leaveData.map(l => l.days),
-          backgroundColor: ['#fd7e14', '#20c997', '#6f42c1', '#d63384', '#6c757d']
+          backgroundColor: ['#fd7e14', '#20c997', '#0162cc', '#d63384', '#6c757d']
         }]
       },
       options: {
@@ -1483,5 +1404,6 @@ try {
     new TablePagination('forgottenTable', 'forgottenPageSize', 'forgottenPagination', 'forgottenInfo', 10);
     <?php endif; ?>
   </script>
+    <?php include __DIR__ . '/../_footer.php'; ?>
 </body>
 </html>

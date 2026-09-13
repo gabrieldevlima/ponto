@@ -148,18 +148,22 @@ if (isset($_GET['edit'])) {
   <title>Grade Horária | DEEDO Ponto</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="css/admin.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
   <link rel="shortcut icon" href="../img/icone-2.ico" type="image/x-icon">
   <link rel="icon" href="../img/icone-2.ico" type="image/x-icon">
 </head>
 <body>
   <?php include __DIR__ . '/_navbar.php'; ?>
-  <div class="container-fluid">
+  <div class="container-fluid admin-content">
 
-<div class="row mb-3">
-    <div class="col">
-        <h2><i class="bi bi-clock-history"></i> Grade Horária</h2>
-        <p class="text-muted">Gerencie os períodos de aula da instituição</p>
+<div class="app-page-header">
+    <div class="app-page-header__main">
+        <div class="app-page-icon"><i class="bi bi-clock-history"></i></div>
+        <div>
+            <h1 class="app-page-title">Grade Horária</h1>
+            <p class="app-page-subtitle">Gerencie os períodos de aula da instituição.</p>
+        </div>
     </div>
 </div>
 
@@ -173,12 +177,13 @@ if (isset($_GET['edit'])) {
 
 <div class="row mb-4">
     <div class="col-md-4">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><?= $editingPeriod ? 'Editar Período' : 'Novo Período' ?></h5>
-            </div>
-            <div class="card-body">
-                <form method="POST">
+        <section class="app-section-card">
+            <header class="app-section-card__header">
+                <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-<?= $editingPeriod ? 'pencil-square' : 'plus-circle' ?>"></i><?= $editingPeriod ? 'Edição' : 'Novo' ?></span>
+                <h2 class="app-section-card__title"><?= $editingPeriod ? 'Editar Período' : 'Novo Período' ?></h2>
+            </header>
+            <div class="app-section-card__body">
+                <form action="" method="post">
                     <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
                     <input type="hidden" name="action" value="<?= $editingPeriod ? 'update' : 'create' ?>">
                     <?php if ($editingPeriod): ?>
@@ -233,15 +238,16 @@ if (isset($_GET['edit'])) {
                     </div>
                 </form>
             </div>
-        </div>
+        </section>
     </div>
-    
+
     <div class="col-md-8">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Períodos Cadastrados</h5>
-                <div>
-                    <select class="form-select form-select-sm" onchange="location.href='?school_id='+this.value">
+        <section class="app-section-card app-table-card">
+            <header class="app-section-card__header">
+                <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-list-ul"></i>Lista</span>
+                <h2 class="app-section-card__title">Períodos Cadastrados</h2>
+                <span class="app-section-card__hint">
+                    <select class="form-select form-select-sm" onchange="location.href='?school_id='+this.value" aria-label="Filtrar por escola">
                         <option value="">Todos</option>
                         <option value="0" <?= $filterSchoolId === 0 ? 'selected' : '' ?>>Apenas Globais</option>
                         <?php foreach ($schools as $sid => $sname): ?>
@@ -250,24 +256,24 @@ if (isset($_GET['edit'])) {
                             </option>
                         <?php endforeach; ?>
                     </select>
-                </div>
-            </div>
-            <div class="card-body p-0">
+                </span>
+            </header>
+            <div>
                 <?php if (empty($periods)): ?>
-                    <div class="p-4 text-center text-muted">
-                        <i class="bi bi-inbox" style="font-size: 3rem;"></i>
-                        <p class="mt-2">Nenhum período cadastrado</p>
+                    <div class="p-5 text-center text-muted">
+                        <i class="bi bi-inbox fs-1 d-block mb-2 opacity-50"></i>
+                        <p class="mb-0">Nenhum período cadastrado</p>
                     </div>
                 <?php else: ?>
                     <div class="table-responsive">
-                        <table class="table table-hover mb-0">
-                            <thead class="table-light">
+                        <table class="table align-middle mb-0">
+                            <thead>
                                 <tr>
-                                    <th>Período</th>
-                                    <th>Horário</th>
-                                    <th>Escola</th>
-                                    <th>Status</th>
-                                    <th>Ações</th>
+                                    <th scope="col">Período</th>
+                                    <th scope="col">Horário</th>
+                                    <th scope="col">Escola</th>
+                                    <th scope="col">Status</th>
+                                    <th scope="col">Ações</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -275,10 +281,16 @@ if (isset($_GET['edit'])) {
                                     <tr>
                                         <td><strong><?= $period['period_number'] ?>º</strong></td>
                                         <td>
-                                            <?= date('H:i', strtotime($period['start_time'])) ?> - 
+                                            <?= date('H:i', strtotime($period['start_time'])) ?> -
                                             <?= date('H:i', strtotime($period['end_time'])) ?>
+                                            <?php
+                                                // Duração tolerante a período que cruza meia-noite (raro mas seguro).
+                                                $sTs = strtotime($period['start_time']);
+                                                $eTs = strtotime($period['end_time']);
+                                                if ($eTs <= $sTs) $eTs += 86400;
+                                            ?>
                                             <small class="text-muted">
-                                                (<?= round((strtotime($period['end_time']) - strtotime($period['start_time'])) / 60) ?> min)
+                                                (<?= round(($eTs - $sTs) / 60) ?> min)
                                             </small>
                                         </td>
                                         <td>
@@ -299,7 +311,7 @@ if (isset($_GET['edit'])) {
                                             <a href="?edit=<?= $period['id'] ?>" class="btn btn-sm btn-outline-primary" title="Editar">
                                                 <i class="bi bi-pencil"></i>
                                             </a>
-                                            <form method="POST" style="display: inline;" 
+                                            <form action="" method="post" style="display: inline;" 
                                                   onsubmit="return confirm('Tem certeza que deseja excluir este período?')">
                                                 <input type="hidden" name="csrf" value="<?= csrf_token() ?>">
                                                 <input type="hidden" name="action" value="delete">
@@ -316,8 +328,8 @@ if (isset($_GET['edit'])) {
                     </div>
                 <?php endif; ?>
             </div>
-        </div>
-        
+        </section>
+
         <div class="alert alert-info mt-3">
             <strong><i class="bi bi-info-circle"></i> Dica:</strong>
             Períodos globais são aplicados a todas as escolas. Você pode criar períodos específicos por escola se necessário.
@@ -328,6 +340,7 @@ if (isset($_GET['edit'])) {
 
   </div> <!-- container-fluid -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <?php include __DIR__ . '/../_footer.php'; ?>
 </body>
 </html>
 

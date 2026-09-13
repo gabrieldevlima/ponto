@@ -1,0 +1,207 @@
+TABELAS NOVAS EM V2 (9)
+=======================
+
+1. teacher_trusted_devices
+   - Rastreia aparelhos confiáveis por professor
+   - Cols: id, teacher_id, device_fingerprint, device_token, label, enrolled_at, last_used_at, enrollment_method, is_active
+   - UKs: uk_teacher_fp (teacher_id, device_fingerprint), uk_ttd_device_token (device_token)
+   - Backfilled: ~140 apparelhos com 3+ check-ins em 30 dias
+
+2. attendance_edits
+   - Auditoria de cada edicao em attendance
+   - Cols: id, attendance_id, edited_by, edited_at, reason, type, diff_minutes, changed_fields, before_json, after_json
+   - FKs: attendance (CASCADE), admins (RESTRICT)
+
+3. audit_logs
+   - Log centralizado de acoes administrativas
+   - Cols: id, admin_id, action, entity, entity_id, payload, ip, created_at
+   - FK: admins (RESTRICT)
+   - Exemplo: action=approve, entity=attendance, entity_id=1234
+
+4. auth_attempt_logs
+   - Log de tentativas de autenticacao
+   - Cols: id, attempt_type, identifier, teacher_id, ip_address, user_agent, success, reason, details, created_at
+   - FK: teachers (SET NULL)
+   - Protege contra brute-force
+
+5. liveness_nonces
+   - Desafios unicos para vivacidade facial
+   - Cols: id, teacher_id, nonce, created_at
+   - Lifetime: 5 minutos (stale cleanup em checkin.php)
+
+6. fraud_detection_log
+   - Log de deteccoes de fraude
+   - Cols: id, attendance_id, teacher_id, detection_type, risk_level, details, ip_address, user_agent, created_at
+   - Tipos: gps_mock, behavioral_anomaly, timing_anomaly
+
+7. class_periods
+   - Grade horaria (periodos de aula)
+   - Cols: id, school_id (NULL=global), period_number, start_time, end_time, active, created_at
+   - UK: uq_school_period (school_id, period_number)
+   - Dados: 10 periodos globais inseridos (7:00-7:50, 7:50-8:40, etc)
+
+8. teacher_class_assignments
+   - Atribui professor a periodos de aula
+   - Cols: id, teacher_id, weekday (0-6), period_id, school_id, created_at
+   - UK: uq_teacher_weekday_period (teacher_id, weekday, period_id)
+   - Permite: professor X tem aula no periodo Y na terca-feira
+
+9. permissions
+   - Controle granular de acesso (tabela, ainda nao integrada)
+   - Cols: id, admin_id, permission_key, granted_at
+   - UK: uk_admin_perm (admin_id, permission_key)
+
+---
+
+COLUNAS NOVAS EM ATTENDANCE (28)
+================================
+
+Offline Sync:
+- client_id VARCHAR(64) UNIQUE (UUID da requisicao)
+- checkout_client_id VARCHAR(64) UNIQUE (UUID do checkout)
+- client_recorded_at DATETIME (timestamp do cliente)
+- offline_delay_seconds INT (delta client-server)
+- record_mode ENUM ('online','offline')
+- recorded_at DATETIME (timestamp servidor)
+- synced_at DATETIME (timestamp de sync)
+
+Sequenciamento + Multiplos Check-ins:
+- nsr BIGINT UNIQUE (numero sequencial unico)
+- class_period_id INT FK (qual periodo da aula)
+- sequence_number INT (1a, 2a, 3a aula do dia)
+
+Fraude + Seguranca:
+- fraud_risk_level TINYINT (0-100)
+- gps_mock_detected TINYINT(1)
+- device_fingerprint VARCHAR(255) (SHA-256)
+- device_identifier VARCHAR(255) (user agent + device ID)
+- liveness_score FLOAT (0-1)
+- liveness_data JSON (dados brutos do desafio)
+
+Recebimento + Comprovante:
+- receipt_generated TINYINT(1)
+- receipt_viewed_at TIMESTAMP
+- hlb_sync_status ENUM ('synced','failed','pending','legacy')
+- hlb_offset_seconds INT
+
+Horas Extras + Pendencias:
+- is_overtime_candidate TINYINT(1)
+- overtime_justification TEXT
+- pending_reasons TEXT (JSON de motivos)
+
+Auditoria de Edicoes:
+- editado_por INT (admin que editou)
+- data_edicao DATETIME
+- motivo_edicao TEXT
+- manual_by_admin_id INT
+- manual_created_at DATETIME
+
+---
+
+COLUNAS NOVAS EM TEACHERS (5)
+=============================
+
+PIN (novo metodo de auth):
+- pin_hash VARCHAR(255) (ARGON2)
+- pin_changed_at DATETIME
+- pin_self_enroll_allowed TINYINT(1)
+
+Face Enrollment Tracking:
+- face_enrolled_at DATETIME (quando registrou)
+- face_enrollment_version INT (para mudancas de algoritmo)
+
+Logica: Re-enroll sugerido apos 180 dias (config face_reenroll_days)
+
+---
+
+INDICES NOVOS (20+)
+===================
+
+attendance (16):
+- uk_attendance_client_id, uk_attendance_checkout_client_id
+- idx_attendance_nsr
+- idx_attendance_teacher_date, idx_attendance_school_date, idx_attendance_date
+- idx_attendance_fraud, idx_attendance_method, idx_attendance_approved
+- idx_attendance_teacher_date_seq, idx_attendance_period
+- idx_attendance_offline_delay, idx_attendance_liveness
+- idx_att_overtime_candidate, idx_attendance_device_fp
+
+Outros:
+- audit_logs.idx_audit_logs_entity, idx_audit_logs_action
+- auth_attempt_logs.idx_auth_attempts_ip, idx_auth_attempts_identifier
+- liveness_nonces.idx_liveness_nonces_teacher, idx_liveness_nonces_created
+- attendance_edits.idx_attendance_edits_attendance, idx_attendance_edits_admin
+- teachers.idx_teachers_active, idx_teachers_cpf
+- class_periods.idx_period_school, idx_period_active
+- applied_migrations.uk_applied_migrations_filename
+
+---
+
+APP SETTINGS CRIADAS (27 novos keys)
+====================================
+
+PIN:
+pin_length=6, pin_max_failures_window=10, pin_rate_limit_window_sec=300
+pin_max_attempts_30min=20, pin_stepup_after_reset_hours=24
+
+Trusted Devices:
+trusted_device_inactive_days=90, trusted_device_max_per_teacher=5
+trusted_device_repeat_threshold=3, trusted_device_repeat_window_days=7
+
+Overtime:
+overtime_tolerance_minutes=30, overtime_requires_justification=1
+overtime_auto_approve=0, overtime_multiplier=1.5, overtime_max_daily_hours=4
+
+Liveness:
+liveness_enabled=1, liveness_min_movement=0.002
+liveness_min_frames=6, liveness_challenge_timeout_s=5
+
+Face:
+face_reenroll_days=180
+
+Outros:
+adaptive_time_check=0, gps_fallback_enabled, gps_fallback_distance_km
+
+---
+
+CHECKLIST DE MIGRACAO V1 -> V2
+==============================
+
+1. Criar 9 tabelas novas
+2. Adicionar 28 colunas em attendance
+3. Adicionar 5 colunas em teachers
+4. Adicionar 4 colunas em applied_migrations
+5. Criar 20+ indices secundarios
+6. Backfill ~140 trusted_devices
+7. Validar integridade de foreign keys
+8. Verificar collation utf8mb4_unicode_ci
+9. Executar consolidate_schema_2026_04.sql por ultimo
+10. Testar helpers.php::run_auto_migrations() em v2
+
+---
+
+POTENCIAIS ISSUES CRITICOS
+==========================
+
+1. NSR sequencial: v1 nao tem, v2 depende
+   Solucao: populate via MAX(id) + 1
+
+2. Device fingerprint: v1 pode ter formato diferente
+   Solucao: backfill usa LENGTH=64 (SHA-256 only)
+
+3. Foreign keys: v1 pode ter orphans
+   Solucao: cleanup ou usar ON DELETE SET NULL
+
+4. Collation: consolidate converte para utf8mb4_unicode_ci
+   Solucao: executar por ultimo
+
+5. Indices: 20+ novos indices crescem schema file
+   Solucao: monitorar free space, considerar INPLACE
+
+6. Offline sync: requer client_id do frontend
+   Solucao: app mobile v2 deve enviar client_id
+
+---
+
+Gerado: 2026-04-27
+Referencia tecnica completa do schema v2.0

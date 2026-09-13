@@ -213,16 +213,20 @@ ORDER BY a.nsr DESC;
 DELIMITER //
 
 -- ============================================================================
--- Trigger para gerar NSR automaticamente ao inserir novo registro
+-- Trigger de NSR REMOVIDO (auditoria de conformidade 2026-08-05).
+--
+-- Esta versão era a mais perigosa das três existentes no repositório: sem a
+-- guarda `IF NEW.nsr IS NULL`, ela SOBRESCREVIA o NSR que o PHP já havia
+-- reservado e incrementava `nsr_sequence` uma segunda vez — cada marcação
+-- consumiria dois números e o NSR gravado divergiria do emitido no comprovante.
+--
+-- A emissão de NSR é responsabilidade exclusiva do PHP (SELECT ... FOR UPDATE
+-- em nsr_sequence, dentro da transação do INSERT) e, a partir da Fase 1 de
+-- docs/AUDITORIA_CONFORMIDADE_2026-08-05.md, do livro fiscal `nsr_ledger`.
+--
+-- Para remover de um ambiente onde tenha sido criado:
+--     DROP TRIGGER IF EXISTS attendance_before_insert_nsr;
 -- ============================================================================
-CREATE TRIGGER IF NOT EXISTS attendance_before_insert_nsr
-BEFORE INSERT ON attendance
-FOR EACH ROW
-BEGIN
-  -- Gera próximo NSR
-  UPDATE nsr_sequence SET current_nsr = current_nsr + 1 WHERE id = 1;
-  SET NEW.nsr = (SELECT current_nsr FROM nsr_sequence WHERE id = 1);
-END//
 
 -- Trigger para registrar alterações em attendance
 CREATE TRIGGER IF NOT EXISTS attendance_update_audit

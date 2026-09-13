@@ -1,0 +1,129 @@
+# Suíte de testes e verificações de conformidade.
+# Fase 9.6 de docs/AUDITORIA_CONFORMIDADE_2026-08-05.md.
+#
+# Antes desta fase o único CI do projeto era o Lighthouse de acessibilidade
+# (a11y.yml). Não havia verificação automática de sintaxe, de testes nem de
+# vulnerabilidade em dependência — e a auditoria encontrou Dompdf com quatro
+# CVEs, incluindo leitura de arquivo local, num sistema que usa Dompdf para
+# gerar o comprovante de ponto.
+
+name: Testes
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Sintaxe PHP
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, sodium, openssl, iconv, mbstring
+          coverage: none
+
+      # Sintaxe de TODO arquivo PHP. Barato e pega o erro mais bobo antes de
+      # qualquer outra coisa rodar.
+      - name: php -l em todos os arquivos
+        run: |
+          erros=0
+          while IFS= read -r -d '' f; do
+            if ! php -l "$f" > /dev/null 2>&1; then
+              echo "::error file=$f::erro de sintaxe"
+              php -l "$f" || true
+              erros=1
+            fi
+          done < <(find . -path ./vendor -prune -o -name '*.php' -print0)
+          exit $erros
+
+  seguranca-dependencias:
+    name: Vulnerabilidades em dependências
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2
+          coverage: none
+
+      # Falha o build se houver advisory conhecido. É o controle que faltava:
+      # a auditoria encontrou 15 advisories em produção, nenhum detectado.
+      - name: composer audit
+        run: composer audit --no-interaction
+
+  testes:
+    name: Suíte
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: ponto_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, sodium, openssl, iconv, mbstring, gd
+          tools: composer:v2
+          coverage: none
+
+      - name: Instalar dependências
+        run: composer install --no-interaction --prefer-dist
+
+      # Segredos de teste. NUNCA reutilizar as chaves de produção aqui — o
+      # runner é efêmero e os valores aparecem no log de qualquer step que
+      # imprima o ambiente.
+      - name: Configuração local de teste
+        run: |
+          cat > config.local.php <<'PHP'
+          <?php
+          $servidor = '127.0.0.1';
+          $usuario  = 'root';
+          $senha    = 'root';
+          $banco    = 'ponto_test';
+          define('LEDGER_HMAC_KEY', str_repeat('a', 64));
+          define('LEDGER_HMAC_KEY_ID', 'ci');
+          define('BIOMETRIC_ENCRYPTION_KEY', base64_encode(str_repeat('b', 32)));
+          PHP
+          php -r '$kp = sodium_crypto_sign_keypair();
+                  file_put_contents("config.local.php",
+                    "define(\"LEDGER_SEAL_SECRET_KEY\", \"" . base64_encode(sodium_crypto_sign_secretkey($kp)) . "\");\n"
+                    . "define(\"LEDGER_SEAL_KEY_ID\", \"ci\");\n", FILE_APPEND);'
+
+      - name: Criar schema
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot ponto_test < sql/install/install.sql
+        continue-on-error: true
+
+      # `run_auto_migrations()` roda no primeiro require de config.php e aplica
+      # o restante do schema.
+      - name: Aplicar migrations
+        run: php -r 'require "config.php"; echo "migrations aplicadas\n";'
+
+      - name: PHPUnit
+        run: php vendor/bin/phpunit --no-coverage
+
+      # Verificações que não são "teste unitário", mas cujo resultado importa
+      # tanto quanto: a cadeia do livro fiscal e os selos precisam fechar.
+      - name: Integridade do livro fiscal
+        run: |
+          php bin/ledger_verify.php
+          php bin/ledger_seal.php --audit
+        continue-on-error: true

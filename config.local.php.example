@@ -1,0 +1,48 @@
+<?php
+/**
+ * MODELO de config.local.php — copie para `config.local.php` e preencha.
+ *
+ * `config.local.php` está no .gitignore e NUNCA deve ser versionado.
+ * `config.php`, ao contrário, É versionado — por isso nenhum segredo pode
+ * ficar lá. Este arquivo é carregado por config.php antes dos define() de
+ * banco e antes de helpers.php.
+ *
+ * Em produção, prefira variáveis de ambiente quando o provedor permitir; as
+ * funções de segredo consultam a constante primeiro e o env em seguida.
+ */
+
+// ---------------------------------------------------------------------------
+// Banco de dados (sobrescreve os valores de config.php)
+// ---------------------------------------------------------------------------
+// $servidor = 'localhost';
+// $usuario  = 'usuario_do_banco';
+// $senha    = 'senha_do_banco';
+// $banco    = 'nome_do_banco';
+
+// ---------------------------------------------------------------------------
+// Chave HMAC do livro fiscal (nsr_ledger) — Fase 1/2 da auditoria.
+//
+// Gere com:  php bin/ledger_keygen.php
+//
+// IMPORTANTE: esta chave NÃO pode ser guardada no banco. Se ela morar no mesmo
+// lugar que os dados que assina, quem obtiver acesso ao banco recalcula a
+// cadeia inteira e a prova de integridade vira teatro. Guarde uma cópia offline
+// em cofre — perdê-la significa não conseguir mais verificar os registros
+// antigos (embora eles continuem legíveis).
+// ---------------------------------------------------------------------------
+// define('LEDGER_HMAC_KEY', 'cole-aqui-a-chave-gerada');
+
+// Identificador da chave em uso — permite rotacionar sem invalidar o passado.
+// define('LEDGER_HMAC_KEY_ID', 'k1');
+
+// ---------------------------------------------------------------------------
+// Segredo HMAC do quiosque (helpers.kiosk_signing_secret()).
+// Se ausente, o sistema gera um por instalação e persiste em app_settings.
+// ---------------------------------------------------------------------------
+// define('KIOSK_SIGNING_SECRET', '');
+
+// ---------------------------------------------------------------------------
+// Ambiente
+// ---------------------------------------------------------------------------
+// define('APP_ENV', 'production');   // 'production' | 'development'
+// define('APP_DEBUG', false);

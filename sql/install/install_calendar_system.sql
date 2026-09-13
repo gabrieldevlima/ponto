@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS calendar_exceptions (
   description TEXT NULL COMMENT 'Descrição detalhada',
   recurrence ENUM('none','yearly','biannual') NOT NULL DEFAULT 'none' COMMENT 'Recorrência',
   is_working_day TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = dia de trabalho (ex: sábado letivo)',
+  reflects_weekday TINYINT NULL COMMENT 'Dia da semana referenciado (0=dom..6=sáb) para type=workday',
   created_by_admin_id INT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,

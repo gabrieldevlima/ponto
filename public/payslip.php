@@ -44,13 +44,23 @@ if (!$payslip) {
 }
 
 // Controle de acesso
-if ($isCollaborator) {
-    $collaboratorId = $_SESSION['collaborator_id'];
+// NC-46 (2026-08-05): não havia checagem alguma para admin — um school_admin
+// lia o holerite (salário) de qualquer colaborador da rede iterando ?id=.
+if ($isAdmin) {
+    [$scopeSql, $scopeParams] = admin_scope_where('t');
+    $stScope = $pdo->prepare("SELECT 1 FROM teachers t WHERE t.id = ? AND {$scopeSql} LIMIT 1");
+    $stScope->execute(array_merge([(int)$payslip['teacher_id']], $scopeParams));
+    if (!$stScope->fetchColumn()) {
+        http_response_code(403);
+        exit('Acesso negado. Este colaborador está fora do seu escopo.');
+    }
+} elseif ($isCollaborator) {
+    $collaboratorId = (int)$_SESSION['collaborator_id'];
     if ((int)$payslip['teacher_id'] !== $collaboratorId) {
         http_response_code(403);
         exit('Você só pode visualizar seus próprios holerites');
     }
-    
+
     // Marca como visualizado
     if (!$payslip['viewed_by_teacher_at']) {
         $pdo->prepare("UPDATE payslips SET viewed_by_teacher_at = NOW() WHERE id = ?")->execute([$payslipId]);

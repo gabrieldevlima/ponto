@@ -3,7 +3,7 @@ require_once __DIR__ . '/../../config.php';
 require_admin();
 if (!has_permission('calendar.manage')) {
     http_response_code(403);
-    exit('Sem permissão.');
+    flash_redirect('error', 'Sem permissão para acessar Calendário e Exceções.', 'dashboard.php');
 }
 $pdo = db();
 $admin = current_admin($pdo);
@@ -24,19 +24,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $description = trim($_POST['description'] ?? '');
         $recurrence = $_POST['recurrence'] ?? 'none';
         $is_working_day = isset($_POST['is_working_day']) ? 1 : 0;
-        
+
+        // Só faz sentido para type='workday' (sábado letivo). Para outros tipos, gravar NULL.
+        $reflects_weekday = null;
+        if ($type === 'workday' && isset($_POST['reflects_weekday']) && $_POST['reflects_weekday'] !== '') {
+            $rw = (int)$_POST['reflects_weekday'];
+            if ($rw >= 0 && $rw <= 6) {
+                $reflects_weekday = $rw;
+            }
+        }
+
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !$name) {
             header('Location: calendar_exceptions.php?msg=' . urlencode('Dados inválidos'));
             exit;
         }
-        
+
         if ($id > 0) {
-            $st = $pdo->prepare("UPDATE calendar_exceptions SET school_id=?, date=?, type=?, name=?, description=?, recurrence=?, is_working_day=?, created_by_admin_id=? WHERE id=?");
-            $st->execute([$school_id, $date, $type, $name, $description, $recurrence, $is_working_day, $_SESSION['admin_id'] ?? null, $id]);
+            $st = $pdo->prepare("UPDATE calendar_exceptions SET school_id=?, date=?, type=?, name=?, description=?, recurrence=?, is_working_day=?, reflects_weekday=?, created_by_admin_id=? WHERE id=?");
+            $st->execute([$school_id, $date, $type, $name, $description, $recurrence, $is_working_day, $reflects_weekday, $_SESSION['admin_id'] ?? null, $id]);
             header('Location: calendar_exceptions.php?msg=' . urlencode('Exceção atualizada!'));
         } else {
-            $st = $pdo->prepare("INSERT INTO calendar_exceptions (school_id, date, type, name, description, recurrence, is_working_day, created_by_admin_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            $st->execute([$school_id, $date, $type, $name, $description, $recurrence, $is_working_day, $_SESSION['admin_id'] ?? null]);
+            $st = $pdo->prepare("INSERT INTO calendar_exceptions (school_id, date, type, name, description, recurrence, is_working_day, reflects_weekday, created_by_admin_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $st->execute([$school_id, $date, $type, $name, $description, $recurrence, $is_working_day, $reflects_weekday, $_SESSION['admin_id'] ?? null]);
             header('Location: calendar_exceptions.php?msg=' . urlencode('Exceção criada!'));
         }
         exit;
@@ -131,6 +140,7 @@ foreach ($exceptions as $exc) {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="<?= esc(csrf_token()) ?>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/admin.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css" rel="stylesheet">
     <link rel="shortcut icon" href="../img/icone-2.ico" type="image/x-icon">
@@ -143,21 +153,12 @@ foreach ($exceptions as $exc) {
     <?php include __DIR__ . '/_navbar.php'; ?>
     
     <div class="container-fluid py-4">
-        <div class="mb-4">
-            <div class="p-3 p-md-4 rounded-3 border bg-white">
-                <div class="d-flex align-items-start gap-3">
-                    <span class="bg-primary-subtle text-primary rounded-circle d-inline-flex align-items-center justify-content-center" style="width:3rem;height:3rem;">
-                        <i class="bi bi-calendar-event fs-4"></i>
-                    </span>
-                    <div class="flex-grow-1">
-                        <h3 class="mb-1 fw-semibold">Calendário e Exceções</h3>
-                        <p class="text-muted mb-2">
-                            Gerencie feriados, sábados letivos, eventos acadêmicos e outras exceções do calendário.
-                        </p>
-                        <div class="small text-muted">
-                            Exceções afetam o cálculo de horas esperadas nos relatórios mensais e financeiros.
-                        </div>
-                    </div>
+        <div class="app-page-header">
+            <div class="app-page-header__main">
+                <div class="app-page-icon"><i class="bi bi-calendar-event"></i></div>
+                <div>
+                    <h1 class="app-page-title">Calendário e Exceções</h1>
+                    <p class="app-page-subtitle">Feriados, sábados letivos, eventos e outras exceções — afetam o cálculo de horas esperadas em relatórios mensais e financeiros.</p>
                 </div>
             </div>
         </div>
@@ -172,11 +173,12 @@ foreach ($exceptions as $exc) {
         <div class="row g-4">
             <!-- Filtros e Ações Rápidas -->
             <div class="col-lg-3">
-                <div class="card shadow-sm mb-3">
-                    <div class="card-header fw-semibold">
-                        <i class="bi bi-funnel me-2"></i>Filtros
-                    </div>
-                    <div class="card-body">
+                <section class="app-section-card">
+                    <header class="app-section-card__header">
+                        <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-funnel"></i>Filtros</span>
+                        <h2 class="app-section-card__title">Filtrar</h2>
+                    </header>
+                    <div class="app-section-card__body">
                         <form method="get">
                             <div class="mb-3">
                                 <label class="form-label">Ano</label>
@@ -209,13 +211,14 @@ foreach ($exceptions as $exc) {
                             </div>
                         </form>
                     </div>
-                </div>
-                
-                <div class="card shadow-sm mb-3">
-                    <div class="card-header fw-semibold">
-                        <i class="bi bi-stars me-2"></i>Ações Rápidas
-                    </div>
-                    <div class="card-body">
+                </section>
+
+                <section class="app-section-card">
+                    <header class="app-section-card__header">
+                        <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-stars"></i>Ações</span>
+                        <h2 class="app-section-card__title">Ações Rápidas</h2>
+                    </header>
+                    <div class="app-section-card__body">
                         <button class="btn btn-primary w-100 mb-2" data-bs-toggle="modal" data-bs-target="#newExceptionModal">
                             <i class="bi bi-plus-circle me-2"></i>Nova Exceção
                         </button>
@@ -223,32 +226,34 @@ foreach ($exceptions as $exc) {
                             <i class="bi bi-calendar3 me-2"></i>Gerar Feriados Móveis
                         </button>
                     </div>
-                </div>
-                
-                <div class="card shadow-sm">
-                    <div class="card-header fw-semibold">
-                        <i class="bi bi-info-circle me-2"></i>Legenda
-                    </div>
-                    <div class="card-body small">
+                </section>
+
+                <section class="app-section-card">
+                    <header class="app-section-card__header">
+                        <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-info-circle"></i>Legenda</span>
+                        <h2 class="app-section-card__title">Cores</h2>
+                    </header>
+                    <div class="app-section-card__body small">
                         <div class="mb-2"><span class="badge bg-danger me-2">●</span>Feriado (não trabalha)</div>
                         <div class="mb-2"><span class="badge bg-primary me-2">●</span>Dia letivo especial</div>
                         <div class="mb-2"><span class="badge bg-success me-2">●</span>Sábado letivo</div>
                         <div><span class="badge bg-secondary me-2">●</span>Evento acadêmico</div>
                     </div>
-                </div>
+                </section>
             </div>
             
             <!-- Calendário Visual -->
             <div class="col-lg-9">
-                <div class="card shadow-sm">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <span class="fw-semibold"><i class="bi bi-calendar4-week me-2"></i>Calendário <?= $filter_year ?></span>
-                        <span class="badge bg-secondary"><?= count($exceptions) ?> exceção(ões)</span>
-                    </div>
-                    <div class="card-body">
+                <section class="app-section-card">
+                    <header class="app-section-card__header">
+                        <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-calendar4-week"></i>Visual</span>
+                        <h2 class="app-section-card__title">Calendário <?= $filter_year ?></h2>
+                        <span class="app-section-card__hint"><?= count($exceptions) ?> exceção(ões)</span>
+                    </header>
+                    <div class="app-section-card__body">
                         <div id="calendar"></div>
                     </div>
-                </div>
+                </section>
             </div>
         </div>
     </div>
@@ -257,7 +262,7 @@ foreach ($exceptions as $exc) {
     <div class="modal fade" id="newExceptionModal" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
-                <form method="post">
+                <form action="" method="post">
                     <div class="modal-header">
                         <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>Nova Exceção de Calendário</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -295,7 +300,24 @@ foreach ($exceptions as $exc) {
                                 <option value="compensation">Compensação</option>
                             </select>
                         </div>
-                        
+
+                        <div class="mb-3" id="modalReflectsWeekdayWrap" style="display:none;">
+                            <label class="form-label">Refere-se ao dia da semana <span class="text-danger">*</span></label>
+                            <select class="form-select" name="reflects_weekday" id="modalReflectsWeekday">
+                                <option value="">— Selecione —</option>
+                                <option value="1">Segunda-feira</option>
+                                <option value="2">Terça-feira</option>
+                                <option value="3">Quarta-feira</option>
+                                <option value="4">Quinta-feira</option>
+                                <option value="5">Sexta-feira</option>
+                                <option value="0">Domingo</option>
+                                <option value="6">Sábado</option>
+                            </select>
+                            <div class="form-text">
+                                O sistema usará a jornada do colaborador para este dia da semana ao aprovar o ponto batido nesta data.
+                            </div>
+                        </div>
+
                         <div class="mb-3">
                             <label class="form-label">Nome <span class="text-danger">*</span></label>
                             <input type="text" class="form-control" name="name" id="modalName" required placeholder="Ex: Natal, Sábado Letivo, Festa Junina">
@@ -336,7 +358,7 @@ foreach ($exceptions as $exc) {
     <div class="modal fade" id="generateMobileModal" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
-                <form method="post">
+                <form action="" method="post">
                     <div class="modal-header">
                         <h5 class="modal-title"><i class="bi bi-calendar3 me-2"></i>Gerar Feriados Móveis</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -387,6 +409,7 @@ foreach ($exceptions as $exc) {
                 center: 'title',
                 right: 'dayGridMonth,dayGridWeek'
             },
+            buttonText: { today: 'Hoje', month: 'Mês', week: 'Semana', day: 'Dia' },
             events: <?= json_encode($events, JSON_UNESCAPED_UNICODE) ?>,
             dateClick: function(info) {
                 // Preenche modal com data clicada
@@ -397,6 +420,8 @@ foreach ($exceptions as $exc) {
                 document.getElementById('modalType').value = 'holiday';
                 document.getElementById('modalRecurrence').value = 'none';
                 document.getElementById('modalIsWorkday').checked = false;
+                document.getElementById('modalReflectsWeekday').value = '';
+                syncReflectsWeekdayVisibility();
                 document.querySelector('#newExceptionModal form').action = '';
                 newModal.show();
             },
@@ -413,7 +438,26 @@ foreach ($exceptions as $exc) {
         
         calendar.render();
     });
+
+    function syncReflectsWeekdayVisibility() {
+        const typeEl = document.getElementById('modalType');
+        const wrap = document.getElementById('modalReflectsWeekdayWrap');
+        const rwEl = document.getElementById('modalReflectsWeekday');
+        if (!typeEl || !wrap || !rwEl) return;
+        const show = (typeEl.value === 'workday');
+        wrap.style.display = show ? '' : 'none';
+        rwEl.required = show;
+        if (!show) rwEl.value = '';
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        const typeEl = document.getElementById('modalType');
+        if (typeEl) typeEl.addEventListener('change', syncReflectsWeekdayVisibility);
+        const modal = document.getElementById('newExceptionModal');
+        if (modal) modal.addEventListener('show.bs.modal', syncReflectsWeekdayVisibility);
+        syncReflectsWeekdayVisibility();
+    });
     </script>
+    <?php include __DIR__ . '/../_footer.php'; ?>
 </body>
 </html>
 

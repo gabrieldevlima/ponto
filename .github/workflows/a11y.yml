@@ -1,0 +1,70 @@
+# Lighthouse CI — auditoria de acessibilidade automática nas páginas admin.
+#
+# Roda em PRs que tocam código admin. Falha o build se o score de Acessibilidade
+# cair abaixo de 90 ou se algum critério estrito (label, image-alt, html-has-lang,
+# color-contrast, valid-lang) quebrar.
+#
+# Configuração de URLs/asserções está em ./lighthouserc.json.
+#
+# Pré-requisito: o workflow precisa de um servidor PHP+MySQL acessível em
+# `http://localhost/ponto_ribeira/...` durante o `lhci autorun`. Use uma
+# action que suba MySQL+Apache (shivammathur/setup-php + crazy-max/ghaction-mysql)
+# ou rode em ambiente self-hosted com XAMPP já rodando.
+
+name: a11y (Lighthouse CI)
+
+on:
+  pull_request:
+    paths:
+      - "public/admin/**"
+      - "helpers.php"
+      - "lighthouserc.json"
+  workflow_dispatch:
+
+jobs:
+  lhci:
+    name: Auditoria de acessibilidade (admin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: pdo, pdo_mysql, mbstring, gd, zip
+          coverage: none
+
+      - name: Setup MySQL 8
+        uses: shogo82148/actions-setup-mysql@v1
+        with:
+          mysql-version: "8.0"
+          root-password: ""
+
+      - name: Bootstrap database
+        run: |
+          mysql -uroot -h127.0.0.1 -e "CREATE DATABASE IF NOT EXISTS ponto CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+          mysql -uroot -h127.0.0.1 ponto < sql/install/install.sql || true
+          # Seed mínimo (1 admin + 1 escola + 1 colab) para autenticar páginas internas
+          if [ -f sql/seeds/lhci_seed.sql ]; then mysql -uroot -h127.0.0.1 ponto < sql/seeds/lhci_seed.sql; fi
+
+      - name: Start PHP built-in server
+        run: |
+          php -S 127.0.0.1:8080 -t public &
+          sleep 2
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.13.x
+
+      - name: Run Lighthouse CI
+        run: |
+          # Reescreve as URLs do lighthouserc para o servidor interno do CI.
+          sed -i "s|http://localhost/ponto_ribeira/public|http://127.0.0.1:8080|g" lighthouserc.json
+          lhci autorun --config=./lighthouserc.json
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}

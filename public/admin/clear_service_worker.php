@@ -1,3 +1,9 @@
+<?php
+// BUG-002: a página deletava IndexedDB sem auth e sem aviso sobre pontos
+// pendentes. Agora exige admin e o JS confirma quantos itens serão perdidos.
+require_once __DIR__ . '/../../config.php';
+require_admin();
+?>
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
@@ -38,7 +44,7 @@
 
         <div id="log" class="mb-3"></div>
 
-        <div class="d-flex gap-2">
+        <div class="d-flex gap-2 flex-wrap">
           <button id="btnClear" class="btn btn-danger" onclick="clearEverything()">
             <i class="bi bi-trash-fill me-2"></i>
             Limpar Service Worker e Cache
@@ -110,11 +116,27 @@
         }
 
         // 3. Limpar IndexedDB (se existir)
+        // BUG-002: antes de apagar, conta itens pendentes na fila offline.
+        // Apagar IDB com pontos não sincronizados causa perda silenciosa
+        // (violação Portaria 671). Exige confirmação explícita.
         try {
           log('Verificando IndexedDB...', 'info');
           const dbs = await indexedDB.databases();
           for (let db of dbs) {
             if (db.name && db.name.includes('ponto')) {
+              const pendingCount = await countPendingInDb(db.name);
+              if (pendingCount > 0) {
+                const ok = confirm(
+                  `ATENÇÃO: o banco "${db.name}" tem ${pendingCount} ponto(s) pendente(s) ` +
+                  `de sincronização.\n\nSe continuar, esses pontos serão PERDIDOS ` +
+                  `permanentemente (não há como recuperar).\n\nDeseja realmente apagar?`
+                );
+                if (!ok) {
+                  log(`✗ Apagamento cancelado: "${db.name}" tem ${pendingCount} pendente(s)`, 'error');
+                  continue;
+                }
+                log(`⚠ Apagando "${db.name}" com ${pendingCount} ponto(s) pendente(s) (admin confirmou)`, 'error');
+              }
               log(`Deletando IndexedDB: ${db.name}`, 'info');
               await new Promise((resolve, reject) => {
                 const request = indexedDB.deleteDatabase(db.name);
@@ -150,6 +172,45 @@
         btn.disabled = false;
         btn.innerHTML = '<i class="bi bi-trash-fill me-2"></i>Tentar Novamente';
       }
+    }
+
+    // BUG-002: abre o IDB em modo somente-leitura e conta itens em 'pending'.
+    // Não bloqueia: se a store não existir ou abrir falhar, retorna 0 (não há
+    // o que perder).
+    function countPendingInDb(dbName) {
+      return new Promise((resolve) => {
+        try {
+          const req = indexedDB.open(dbName);
+          req.onerror = () => resolve(0);
+          // Fix #2: outra aba/SW pode estar com transação de versão aberta;
+          // sem este handler, a Promise nunca resolveria e o botão ficaria
+          // travado em "Limpando...". Resolve(0) força confirm sem contagem.
+          req.onblocked = () => resolve(0);
+          req.onsuccess = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains('pending')) {
+              try { db.close(); } catch (_) {}
+              return resolve(0);
+            }
+            try {
+              const tx = db.transaction('pending', 'readonly');
+              const store = tx.objectStore('pending');
+              const cnt = store.count();
+              cnt.onsuccess = () => {
+                resolve(cnt.result || 0);
+                try { db.close(); } catch (_) {}
+              };
+              cnt.onerror = () => {
+                resolve(0);
+                try { db.close(); } catch (_) {}
+              };
+            } catch (_) {
+              try { db.close(); } catch (_) {}
+              resolve(0);
+            }
+          };
+        } catch (_) { resolve(0); }
+      });
     }
 
     // Log inicial

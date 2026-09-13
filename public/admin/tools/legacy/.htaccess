@@ -1,0 +1,9 @@
+# Scripts one-off de migração/correção que rodaram apenas uma vez no passado.
+# Não devem ser executados via web. Defesa em profundidade.
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>
