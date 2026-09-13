@@ -8,3 +8,16 @@
     Deny from all
   </IfModule>
 </FilesMatch>
+
+# HOTFIX 2026-09 (aplicado em produção em 13/09): arquivos internos (_navbar,
+# _pagination, _tpl_*_pdf, _head, _report_engine) só são incluídos por outras
+# páginas. Acessados direto, renderizavam vazios ou davam 500.
+<FilesMatch "^_.*\.php$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
