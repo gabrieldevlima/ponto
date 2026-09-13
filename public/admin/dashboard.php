@@ -357,13 +357,16 @@ try {
         JOIN leave_types lt ON lt.id = l.type_id
         JOIN teachers t ON t.id = l.teacher_id
         WHERE l.approved = 1 
-          AND DATE_FORMAT(l.start_date, '%Y-%m') = ?
+          -- Intervalo de datas em vez de DATE_FORMAT(...) = ?: no MariaDB o parâmetro
+          -- chega como utf8mb4_general_ci e o DATE_FORMAT como unicode_ci:
+          -- Illegal mix of collations (gráfico vazio em produção, erro engolido).
+          AND l.start_date >= ? AND l.start_date < (? + INTERVAL 1 MONTH)
           AND $whereTeacher
         GROUP BY lt.id, lt.name
         ORDER BY total_days DESC
         LIMIT 5
     ");
-    $stLeaves->execute(array_merge([date('Y-m')], $paramsTeacher));
+    $stLeaves->execute(array_merge([date('Y-m-01'), date('Y-m-01')], $paramsTeacher));
     while ($row = $stLeaves->fetch(PDO::FETCH_ASSOC)) {
         $topLeaveTypes[] = [
             'name' => $row['name'],
