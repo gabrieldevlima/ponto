@@ -1,0 +1,65 @@
+# Capturas faciais (dados de runtime, não código)
+public/photos/*
+!public/photos/.gitkeep
+# NC-03: o .htaccess que bloqueia acesso direto às fotos é CÓDIGO de segurança,
+# não dado de runtime. Sem esta exceção ele não é versionado nem chega ao
+# servidor no deploy, e o diretório volta a ficar aberto silenciosamente.
+!public/photos/.htaccess
+
+# Logs
+logs/*
+!logs/.gitkeep
+*.log
+
+# Backups
+*.bak
+*.bak_work
+*.tmp
+*.orig
+*.swp
+sql/_archive/
+
+# IDE / editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Composer (vendor é commitado intencionalmente em projetos legados; remover esta linha para versionar)
+# /vendor/
+
+# Variáveis de ambiente locais
+.env
+.env.local
+.env.*.local
+
+# Credenciais locais (Azure Face, segredo HMAC do quiosque) — nunca versionar
+/config.local.php
+
+# Cache PHP
+*.cache
+
+# Migrations obsoletas (movidas, não versionar)
+sql/migrations/_obsolete/
+
+# Snapshots de auditoria
+backup_pre_*.sql
+audit_*.sql
+
+# Dumps de banco com dados pessoais reais — NUNCA versionar (auditoria 2026-09-12)
+/install_producao*.sql
+/u803039033_*.sql
+sql/backups/*.sql
+sql/_export_prod/99_full_dump_FALLBACK.sql
+/test_output.php
+
+# Ferramentas de IDE/agentes e artefatos de runtime
+.cursor/
+.phpunit.cache/
+logs/.cache_*
+logs/.migrations_ok_*
