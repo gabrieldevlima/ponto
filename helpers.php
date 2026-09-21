@@ -5548,6 +5548,36 @@ function pin_set_for_teacher(PDO $pdo, int $teacherId, ?int $length = null, ?str
 }
 
 /**
+ * O colaborador será barrado se tentar o primeiro acesso agora?
+ *
+ * Espelha a decisão de api/pin_enroll.php: quem não tem PIN passa pelo
+ * primeiro acesso, e lá só recebe PIN quem prova identidade — por face já
+ * cadastrada, ou por `pin_self_enroll_allowed = 1`, que é o admin autorizando
+ * nominalmente. Sem nenhum dos dois o endpoint responde `blocked_contact_admin`
+ * e manda procurar o administrador (o CPF sozinho não autentica ninguém, já
+ * que circula em crachá e contracheque).
+ *
+ * É exatamente o estado em que todo cadastro novo nasce, porque a coluna é
+ * DEFAULT 0 e o formulário de colaborador não a expõe. Serve para avisar o
+ * admin no ato do cadastro, em vez de o colaborador descobrir na fila do ponto.
+ *
+ * Se a política de pin_enroll.php mudar, esta função muda junto.
+ */
+function teacher_first_access_pending(PDO $pdo, int $teacherId): bool {
+    if ($teacherId <= 0) return false;
+    $st = $pdo->prepare("SELECT active, pin_hash, face_descriptors, pin_self_enroll_allowed
+                         FROM teachers WHERE id = ? LIMIT 1");
+    $st->execute([$teacherId]);
+    $t = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$t)                                          return false;
+    if ((int)$t['active'] !== 1)                      return false;
+    if (!empty($t['pin_hash']))                       return false; // cai em pin_already_set
+    if (!empty($t['face_descriptors']))               return false; // prova identidade pela foto
+    if ((int)$t['pin_self_enroll_allowed'] === 1)     return false; // admin já liberou
+    return true;
+}
+
+/**
  * Calcula hash estável do dispositivo combinando user-agent + fingerprint do cliente.
  * IP é deliberadamente EXCLUÍDO da chave porque em redes móveis (4G) o IP público
  * do carrier muda entre sessões — incluí-lo derrubaria a confiabilidade do device

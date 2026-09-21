@@ -33,6 +33,20 @@ if (!empty($_GET['msg'])) {
   ];
 }
 
+// Aviso de primeiro acesso pendente. Quem acaba de ser cadastrado nasce sem PIN
+// e sem face e, pela política de api/pin_enroll.php, é barrado ao tentar bater
+// ponto até o admin liberar — o colaborador vê "procure o administrador" e o
+// admin não ficava sabendo de nada. O id vem do redirect de teachers_save.php;
+// o estado é reconferido no banco para não avisar à toa em refresh ou link velho.
+$avisoPrimeiroAcesso = null;
+$pinPendingId = sanitize_int_or_null($_GET['pin_pending'] ?? null);
+if ($pinPendingId && teacher_first_access_pending($pdo, $pinPendingId)) {
+  list($avisoScopeSql, $avisoScopeParams) = admin_scope_where('t');
+  $stAviso = $pdo->prepare("SELECT t.id, t.name, t.cpf FROM teachers t WHERE t.id = ? AND {$avisoScopeSql} LIMIT 1");
+  $stAviso->execute(array_merge([$pinPendingId], $avisoScopeParams));
+  $avisoPrimeiroAcesso = $stAviso->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
 // Toggle status (POST + CSRF)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle') {
   $id = sanitize_int_or_null($_POST['id'] ?? null);
@@ -258,6 +272,21 @@ function sort_link(string $key, string $label): string
         <?= $icon ?><?= $msg['text'] ?>
       </div>
     <?php endforeach; ?>
+
+    <?php if ($avisoPrimeiroAcesso): ?>
+      <div class="alert alert-warning d-flex flex-column flex-md-row align-items-md-center gap-3" role="alert">
+        <div class="flex-fill">
+          <strong><i class="bi bi-exclamation-triangle"></i> Falta liberar o primeiro acesso</strong><br>
+          <?= esc($avisoPrimeiroAcesso['name']) ?> ainda não tem PIN nem foto cadastrada. Enquanto isso,
+          o sistema recusa o primeiro acesso dele com a mensagem &ldquo;precisa ser liberado pelo
+          administrador&rdquo; e ele não consegue bater ponto.
+        </div>
+        <a class="btn btn-warning text-nowrap"
+           href="teacher_pin_manage.php?q=<?= urlencode(preg_replace('/\D/', '', (string)$avisoPrimeiroAcesso['cpf'])) ?>">
+          <i class="bi bi-key"></i> Liberar primeiro acesso
+        </a>
+      </div>
+    <?php endif; ?>
 
     <section class="app-section-card app-table-card">
       <header class="app-section-card__header">

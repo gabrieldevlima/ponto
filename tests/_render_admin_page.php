@@ -34,6 +34,16 @@ $_SERVER['HTTP_USER_AGENT'] = 'teste-render';
 // renderizam o pré-voo a partir dele.
 $_GET = ['de' => '2026-06-01', 'ate' => '2026-06-30'];
 $_REQUEST = $_GET;
+
+// Parâmetros extras no formato chave=valor, vindos do argv, sobrepõem o $_GET
+// padrão. Permite exercitar uma tela em estado específico (ex.: teachers.php
+// logo após cadastrar alguém) sem duplicar este runner.
+foreach (array_slice($argv, 2) as $parExtra) {
+    if (!str_contains($parExtra, '=')) continue;
+    [$chaveExtra, $valorExtra] = explode('=', $parExtra, 2);
+    $_GET[$chaveExtra] = $valorExtra;
+}
+$_REQUEST = $_GET;
 $_POST = [];
 
 require_once dirname(__DIR__) . '/config.php';
@@ -63,4 +73,9 @@ $marca('navbar',    str_contains($html, 'navbar'));
 $marca('footer',    str_contains($html, '</html>'));
 // Aviso do PHP vazado para dentro da página: não derruba, mas é defeito.
 $marca('sem_warning', !preg_match('/\b(Warning|Notice|Deprecated|Fatal error)\b:/', $html));
+// Com PONTO_RENDER_DUMP=1 o HTML inteiro sai depois dos marcadores, para o
+// chamador afirmar sobre o conteúdo e não só sobre a saúde da página.
+if (getenv('PONTO_RENDER_DUMP')) {
+    echo "---HTML---\n", $html;
+}
 exit(0);

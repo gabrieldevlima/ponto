@@ -6,6 +6,7 @@ $pdo = db();
 $adm = current_admin($pdo);
 
 $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
+$colaboradorCriadoId = 0; // preenchido só quando este save cria um cadastro
 $name = trim($_POST['name'] ?? '');
 $cpf = preg_replace('/\D/', '', $_POST['cpf'] ?? '');
 $email = trim($_POST['email'] ?? '');
@@ -324,6 +325,7 @@ try {
       $id = (int)$pdo->lastInsertId();
       audit_log('create','teacher',$id,['name'=>$name,'pis'=>$pis ?: null,'matricula'=>$matricula,'type_id'=>$type_id,'base_salary'=>$base_salary,'network_wide'=>$network_wide]);
       $afdOperacao = 'I';
+      $colaboradorCriadoId = $id;
   }
 
   // Livro fiscal — registro tipo 5 do AFD (inclusão/alteração de empregado).
@@ -464,7 +466,15 @@ try {
       $_SESSION['teacher_idempotency_seen'][$idempotencyToken] = time();
   }
 
-  header('Location: teachers.php?msg=' . urlencode('Colaborador salvo com sucesso.') . '&msg_type=success');
+  // Cadastro novo nasce sem PIN e sem face, e por isso api/pin_enroll.php vai
+  // barrar o primeiro acesso dele até alguém liberar. Leva o id adiante para a
+  // lista avisar quem acabou de cadastrar, em vez de o colaborador descobrir
+  // sozinho na hora de bater ponto.
+  $destino = 'teachers.php?msg=' . urlencode('Colaborador salvo com sucesso.') . '&msg_type=success';
+  if (!empty($colaboradorCriadoId) && teacher_first_access_pending($pdo, (int)$colaboradorCriadoId)) {
+      $destino .= '&pin_pending=' . (int)$colaboradorCriadoId;
+  }
+  header('Location: ' . $destino);
   exit;
 } catch (PDOException $e) {
   if ($pdo->inTransaction()) $pdo->rollBack();
