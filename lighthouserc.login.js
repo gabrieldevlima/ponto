@@ -38,6 +38,15 @@ module.exports = async (browser, context) => {
     // ociosa era frágil e não diz nada sobre o form estar pronto.
     await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
+    // Os cookies persistem entre as URLs auditadas: da segunda em diante a
+    // sessão já está aberta e login.php redireciona para o dashboard. Não há o
+    // que fazer — reusa a sessão. Sem isso o script procurava o formulário no
+    // dashboard e falhava na segunda URL.
+    if (!new URL(page.url()).pathname.endsWith('/login.php')) {
+      console.log('[lhci-login] Sessão já aberta, reusando para ' + context.url);
+      return;
+    }
+
     const cpfField = await page.$('input[name="cpf"]');
     const passField = await page.$('input[name="pass"]');
     if (!cpfField || !passField) {
