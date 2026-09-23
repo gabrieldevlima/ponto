@@ -99,6 +99,12 @@ jobs:
 
       - name: Run Lighthouse CI
         run: |
+          # O runner traz o Chrome, mas o Lighthouse CI não o acha sozinho: o
+          # healthcheck parava em "Chrome installation not found" antes de
+          # auditar qualquer página. Aponta o caminho explicitamente.
+          export CHROME_PATH="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || command -v chromium || true)"
+          if [ -z "$CHROME_PATH" ]; then echo "::error::Chrome não encontrado no runner"; exit 1; fi
+          echo "Chrome: $CHROME_PATH ($("$CHROME_PATH" --version))"
           # Reescreve as URLs do lighthouserc para o servidor interno do CI.
           sed -i "s|http://localhost/ponto_ribeira/public|http://127.0.0.1:8080|g" lighthouserc.json
           lhci autorun --config=./lighthouserc.json
