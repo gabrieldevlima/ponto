@@ -113,38 +113,55 @@ jobs:
                     "define(\"LEDGER_SEAL_SECRET_KEY\", \"" . base64_encode(sodium_crypto_sign_secretkey($kp)) . "\");\n"
                     . "define(\"LEDGER_SEAL_KEY_ID\", \"ci\");\n", FILE_APPEND);'
 
-      - name: Criar schema
+      # Mesma collation padrão da produção. O container vem com o default do
+      # MariaDB 11.8 (uca1400) e a produção roda em utf8mb4_unicode_ci; sem
+      # alinhar, as conexões e o banco de teste se comportariam diferente.
+      # `character_set_collations` fica no default de propósito — é igual ao da
+      # produção, e é ele que faz tabela nova SEM `COLLATE` nascer em uca1400.
+      # Deixá-lo igual é o que permite ao CI pegar esse erro numa migração nova.
+      - name: Alinhar o servidor com a produção
         run: |
-          mysql -h 127.0.0.1 -uroot -proot ponto_test < sql/install/install.sql
+          mysql -h 127.0.0.1 -uroot -proot -e "
+            SET GLOBAL character_set_server = 'utf8mb4';
+            SET GLOBAL collation_server     = 'utf8mb4_unicode_ci';
+            ALTER DATABASE ponto_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-      # `run_auto_migrations()` roda no primeiro require de config.php e aplica
-      # o restante do schema.
-      - name: Aplicar migrations
+      # O banco parte do schema REAL de produção (só estrutura, sem dado nenhum),
+      # não de install.sql + as 73 migrações em ordem alfabética. Montar do zero
+      # não reproduzia a produção: as legadas rodaram lá antes das datadas, uma
+      # coluna foi removida e recriada fora da ordem dos nomes, e o CI acusava
+      # falhas que não existem — escondendo as que existem. Ver
+      # bin/schema_snapshot.php para regenerar.
+      - name: Carregar o schema de produção
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot ponto_test < sql/schema/producao.sql
+          n=$(mysql -h 127.0.0.1 -uroot -proot -N -B ponto_test -e "SELECT COUNT(*) FROM applied_migrations;")
+          echo "SNAPSHOT_MIGRACOES=$n" >> "$GITHUB_ENV"
+          echo "schema de produção carregado; $n migrações já aplicadas lá"
+
+      # `run_auto_migrations()` roda no primeiro require de config.php. Com o
+      # snapshot, aplica SÓ o que ainda não está em produção — exatamente o que
+      # o próximo deploy vai rodar.
+      - name: Aplicar migrations pendentes
         run: php -r 'require "config.php"; echo "migrations aplicadas\n";'
 
-      # O runner de migrações registra os erros e segue — bom em produção, ruim
-      # aqui: sem esta conferência, um schema pela metade só aparecia 28 testes
-      # depois, como "tabela não existe", e ninguém sabia que a culpa era do
-      # bootstrap. Agora o job para no ponto certo, dizendo o que faltou.
-      - name: Conferir o schema
+      - name: Dados de referência
+        run: mysql -h 127.0.0.1 -uroot -proot ponto_test < sql/seeds/ci_reference.sql
+
+      # O sinal que importa. O runner registra a falha e segue — bom em produção,
+      # ruim aqui. Toda migração que falhar neste passo vai falhar no deploy.
+      - name: Conferir as migrações pendentes
         run: |
-          faltando=""
-          for t in teachers attendance admins schools applied_migrations \
-                   auth_attempt_logs audit_logs nsr_sequence leaves leave_types \
-                   employer_config calendar_exceptions teacher_trusted_devices \
-                   collaborator_remember_tokens lgpd_consent; do
-            existe=$(mysql -h 127.0.0.1 -uroot -proot -N -B ponto_test \
-              -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='ponto_test' AND table_name='$t';")
-            [ "$existe" = "1" ] || faltando="$faltando $t"
-          done
-          if [ -n "$faltando" ]; then
-            echo "::error::schema incompleto — tabelas ausentes:$faltando"
+          falhas=$(mysql -h 127.0.0.1 -uroot -proot -N -B ponto_test -e "
+            SELECT CONCAT(filename, ' — ', LEFT(failure_reason, 300))
+              FROM applied_migrations WHERE failure_reason IS NOT NULL;")
+          if [ -n "$falhas" ]; then
+            echo "::error::migração falhou — vai falhar também no próximo deploy"
+            echo "$falhas"
             exit 1
           fi
-          total=$(mysql -h 127.0.0.1 -uroot -proot -N -B ponto_test \
-            -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='ponto_test';")
-          echo "schema com $total tabelas, todas as esperadas presentes"
-
+          total=$(mysql -h 127.0.0.1 -uroot -proot -N -B ponto_test -e "SELECT COUNT(*) FROM applied_migrations;")
+          echo "$((total - SNAPSHOT_MIGRACOES)) migrações pendentes aplicadas sem erro"
       - name: PHPUnit
         run: php vendor/bin/phpunit --no-coverage
 

@@ -65,24 +65,29 @@ jobs:
           $banco    = 'ponto';
           PHP
 
-      # install.sql sozinho cria só o schema base. O seed insere em colunas que
-      # nascem nas migrações (admins.name, admins.cpf), então rodava antes da
-      # hora e morria com "Unknown column 'name'" — e o `|| true` do install
-      # escondia qualquer falha anterior a essa. Ordem correta: schema, migrações,
-      # seed; e cada passo falha por conta própria.
-      - name: Criar schema
-        run: mysql -h 127.0.0.1 -uroot -proot ponto < sql/install/install.sql
+      # Mesmo bootstrap do workflow de testes (ver comentários em tests.yml):
+      # servidor na collation da produção, schema real de produção, migrações
+      # pendentes, dados de referência e, por último, o seed do Lighthouse.
+      # Antes o seed rodava sobre install.sql puro, sem as migrações, e morria
+      # em "Unknown column 'name'" — admins.name nasce numa migração.
+      - name: Alinhar o servidor com a produção
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot -e "
+            SET GLOBAL character_set_server = 'utf8mb4';
+            SET GLOBAL collation_server     = 'utf8mb4_unicode_ci';
+            ALTER DATABASE ponto CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-      - name: Aplicar migrations
+      - name: Carregar o schema de produção
+        run: mysql -h 127.0.0.1 -uroot -proot ponto < sql/schema/producao.sql
+
+      - name: Aplicar migrations pendentes
         run: php -r 'require "config.php"; echo "migrations aplicadas\n";'
 
-      - name: Seed do Lighthouse
+      - name: Dados de referência e seed do Lighthouse
         run: |
+          mysql -h 127.0.0.1 -uroot -proot ponto < sql/seeds/ci_reference.sql
           # Seed mínimo (1 admin + 1 escola + 1 colab) para autenticar páginas internas
-          if [ -f sql/seeds/lhci_seed.sql ]; then
-            mysql -h 127.0.0.1 -uroot -proot ponto < sql/seeds/lhci_seed.sql
-          fi
-
+          mysql -h 127.0.0.1 -uroot -proot ponto < sql/seeds/lhci_seed.sql
       - name: Start PHP built-in server
         run: |
           php -S 127.0.0.1:8080 -t public &
