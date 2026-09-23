@@ -6,10 +6,9 @@
 #
 # Configuração de URLs/asserções está em ./lighthouserc.json.
 #
-# Pré-requisito: o workflow precisa de um servidor PHP+MySQL acessível em
-# `http://localhost/ponto_ribeira/...` durante o `lhci autorun`. Use uma
-# action que suba MySQL+Apache (shivammathur/setup-php + crazy-max/ghaction-mysql)
-# ou rode em ambiente self-hosted com XAMPP já rodando.
+# O próprio workflow sobe o que precisa: MariaDB como serviço e o servidor
+# embutido do PHP em 127.0.0.1:8080, para onde as URLs do lighthouserc são
+# reescritas antes do `lhci autorun`.
 
 name: a11y (Lighthouse CI)
 
@@ -25,6 +24,20 @@ jobs:
   lhci:
     name: Auditoria de acessibilidade (admin)
     runs-on: ubuntu-latest
+
+    # Mesmo motor da produção e do workflow de testes. Ver o comentário em
+    # tests.yml: as migrações usam sintaxe que só existe no MariaDB.
+    services:
+      mariadb:
+        image: mariadb:11.8
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: ponto
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -40,18 +53,35 @@ jobs:
           extensions: pdo, pdo_mysql, mbstring, gd, zip
           coverage: none
 
-      - name: Setup MySQL 8
-        uses: shogo82148/actions-setup-mysql@v1
-        with:
-          mysql-version: "8.0"
-          root-password: ""
-
-      - name: Bootstrap database
+      # O PHP precisa apontar para o banco do runner. Sem isto, config.php usa o
+      # nome do banco de produção e o servidor embutido não conecta em nada.
+      - name: Configuração local de teste
         run: |
-          mysql -uroot -h127.0.0.1 -e "CREATE DATABASE IF NOT EXISTS ponto CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-          mysql -uroot -h127.0.0.1 ponto < sql/install/install.sql || true
+          cat > config.local.php <<'PHP'
+          <?php
+          $servidor = '127.0.0.1';
+          $usuario  = 'root';
+          $senha    = 'root';
+          $banco    = 'ponto';
+          PHP
+
+      # install.sql sozinho cria só o schema base. O seed insere em colunas que
+      # nascem nas migrações (admins.name, admins.cpf), então rodava antes da
+      # hora e morria com "Unknown column 'name'" — e o `|| true` do install
+      # escondia qualquer falha anterior a essa. Ordem correta: schema, migrações,
+      # seed; e cada passo falha por conta própria.
+      - name: Criar schema
+        run: mysql -h 127.0.0.1 -uroot -proot ponto < sql/install/install.sql
+
+      - name: Aplicar migrations
+        run: php -r 'require "config.php"; echo "migrations aplicadas\n";'
+
+      - name: Seed do Lighthouse
+        run: |
           # Seed mínimo (1 admin + 1 escola + 1 colab) para autenticar páginas internas
-          if [ -f sql/seeds/lhci_seed.sql ]; then mysql -uroot -h127.0.0.1 ponto < sql/seeds/lhci_seed.sql; fi
+          if [ -f sql/seeds/lhci_seed.sql ]; then
+            mysql -h 127.0.0.1 -uroot -proot ponto < sql/seeds/lhci_seed.sql
+          fi
 
       - name: Start PHP built-in server
         run: |

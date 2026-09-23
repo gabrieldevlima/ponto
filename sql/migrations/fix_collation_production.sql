@@ -6,10 +6,14 @@
 -- =====================================================================
 
 -- Define o banco (ajuste se necessário)
--- USE u803039033_ponto;
+-- USE <banco do ambiente>;
 
 -- Altera charset e collation do BANCO
-ALTER DATABASE u803039033_ponto CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- O nome do banco NAO entra aqui. Estava fixo em `u803039033_ponto`, que nao e
+-- o banco de nenhum ambiente: producao roda em `u803039033_p_oeiras_p` e o CI
+-- num banco descartavel, entao a migracao falhava em todo lugar. Sem o nome,
+-- ALTER DATABASE aplica ao banco corrente da conexao, que e o certo.
+ALTER DATABASE CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- Altera TODAS as tabelas para utf8mb4_unicode_ci
 ALTER TABLE admins CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
