@@ -617,10 +617,10 @@ try {
       <div class="col-12 col-md-3">
         <div class="card h-100 border-0 shadow-sm card-hover bg-success bg-opacity-10 border-success border-opacity-25">
           <div class="card-body">
-            <div class="text-success fw-semibold">
+            <div class="text-success-emphasis fw-semibold">
               <i class="bi bi-check-circle me-1"></i>Aprovados Hoje
             </div>
-            <div class="fs-3 fw-bold text-success"><?= (int)$presentToday ?></div>
+            <div class="fs-3 fw-bold text-success-emphasis"><?= (int)$presentToday ?></div>
             <div class="small text-muted">Pontos confirmados</div>
           </div>
         </div>
@@ -628,10 +628,10 @@ try {
       <div class="col-12 col-md-3">
         <div class="card h-100 border-0 shadow-sm card-hover bg-warning bg-opacity-10 border-warning border-opacity-25">
           <div class="card-body">
-            <div class="text-warning fw-semibold">
+            <div class="text-warning-emphasis fw-semibold">
               <i class="bi bi-clock-history me-1"></i>Pendentes Hoje
             </div>
-            <div class="fs-3 fw-bold text-warning"><?= (int)$pendingToday ?></div>
+            <div class="fs-3 fw-bold text-warning-emphasis"><?= (int)$pendingToday ?></div>
             <div class="small text-muted">Aguardando aprovação</div>
           </div>
         </div>
@@ -642,10 +642,10 @@ try {
       <div class="col-12 col-md-3">
         <div class="card h-100 border-0 shadow-sm card-hover bg-danger bg-opacity-10 border-danger border-opacity-25">
           <div class="card-body">
-            <div class="text-danger fw-semibold">
+            <div class="text-danger-emphasis fw-semibold">
               <i class="bi bi-x-circle me-1"></i>Ausentes Hoje
             </div>
-            <div class="fs-3 fw-bold text-danger"><?= (int)$absentToday ?></div>
+            <div class="fs-3 fw-bold text-danger-emphasis"><?= (int)$absentToday ?></div>
             <div class="small text-muted">Não registraram ponto</div>
           </div>
         </div>
@@ -664,10 +664,10 @@ try {
       <div class="col-12 col-md-3">
         <div class="card h-100 border-0 shadow-sm card-hover bg-info bg-opacity-10 border-info border-opacity-25">
           <div class="card-body">
-            <div class="text-info fw-semibold">
+            <div class="text-info-emphasis fw-semibold">
               <i class="bi bi-calendar-x me-1"></i>Afastamentos
             </div>
-            <div class="fs-3 fw-bold text-info"><?= (int)$leavesActive ?></div>
+            <div class="fs-3 fw-bold text-info-emphasis"><?= (int)$leavesActive ?></div>
             <div class="small text-muted">Licenças/férias hoje</div>
           </div>
         </div>
@@ -686,10 +686,10 @@ try {
       <div class="col-12 col-md-3">
         <div class="card h-100 border-0 shadow-sm card-hover <?= $forgottenCount > 0 ? 'bg-warning bg-opacity-10 border-warning border-opacity-25' : '' ?>">
           <div class="card-body">
-            <div class="<?= $forgottenCount > 0 ? 'text-warning fw-semibold' : 'text-muted' ?>">
+            <div class="<?= $forgottenCount > 0 ? 'text-warning-emphasis fw-semibold' : 'text-muted' ?>">
               <i class="bi bi-exclamation-circle me-1"></i>Saídas Esquecidas
             </div>
-            <div class="fs-3 fw-bold <?= $forgottenCount > 0 ? 'text-warning' : '' ?>">
+            <div class="fs-3 fw-bold <?= $forgottenCount > 0 ? 'text-warning-emphasis' : '' ?>">
               <?= $forgottenCount ?>
             </div>
             <div class="small text-muted">Registros incompletos</div>

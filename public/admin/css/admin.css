@@ -1359,3 +1359,12 @@ form.row.g-2 {
   flex-wrap: wrap;
   gap: 0.5rem;
 }
+
+/* Código dentro de alertas herda a cor de texto do alerta. O Bootstrap pinta
+   <code> de rosa (#d63384) independentemente do fundo, e sobre o cinza do
+   alert-secondary isso dava 3,5:1 — abaixo do mínimo WCAG AA (4,5:1). A cor de
+   texto de cada variante de alerta já é escolhida escura para o próprio fundo;
+   a fonte monoespaçada continua distinguindo o código. */
+.alert code {
+  color: inherit;
+}

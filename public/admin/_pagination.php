@@ -16,13 +16,18 @@ $urlForPage = function ($p) use ($baseUrl, $sep, $pageParam) {
 };
 $prevDisabled = $currentPage <= 1;
 $nextDisabled = $currentPage >= $totalPages;
+// Anterior/Próximo desabilitados são um link sem href com aria-disabled, como
+// recomenda o Bootstrap: o leitor de tela anuncia "indisponível" em vez de ler
+// um texto solto, e o estado fica declarado. WCAG dispensa controles inativos
+// de contraste mínimo — mas só se o estado estiver declarado; como <span> sem
+// estado, o Lighthouse o tratava como texto comum e acusava 2,5:1.
 ?>
 <div class="admin-pagination-wrap">
   <nav aria-label="Paginação">
     <ul class="pagination justify-content-center flex-wrap mb-0">
       <li class="page-item<?= $prevDisabled ? ' disabled' : '' ?>">
         <?php if ($prevDisabled): ?>
-          <span class="page-link">« Anterior</span>
+          <a class="page-link" role="link" aria-disabled="true">« Anterior</a>
         <?php else: ?>
           <a class="page-link" href="<?= esc($urlForPage($currentPage - 1)) ?>">« Anterior</a>
         <?php endif; ?>
@@ -54,7 +59,7 @@ $nextDisabled = $currentPage >= $totalPages;
       <?php endif; ?>
       <li class="page-item<?= $nextDisabled ? ' disabled' : '' ?>">
         <?php if ($nextDisabled): ?>
-          <span class="page-link">Próximo »</span>
+          <a class="page-link" role="link" aria-disabled="true">Próximo »</a>
         <?php else: ?>
           <a class="page-link" href="<?= esc($urlForPage($currentPage + 1)) ?>">Próximo »</a>
         <?php endif; ?>
