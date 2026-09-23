@@ -1,0 +1,21 @@
+# NC-03 (auditoria 2026-08-05) — bloqueio de acesso direto a fotos de marcação.
+#
+# Fotos de rosto são dado biométrico (LGPD art. 5º, II e art. 11). Até esta
+# correção o diretório era servido pelo Apache sem qualquer autenticação: a
+# única proteção era o nome do arquivo ser aleatório — segurança por obscuridade.
+#
+# O acesso legítimo passa por /photo_view.php?att=<id>, que autentica a sessão
+# e aplica escopo de admin / posse do colaborador antes de entregar o arquivo.
+# O PHP lê os arquivos pelo sistema de arquivos, então este bloqueio não afeta
+# a leitura interna nem a rotina de expurgo (cron_photo_cleanup.php).
+
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+  Order allow,deny
+  Deny from all
+</IfModule>
+
+# Impede listagem do diretório caso o bloqueio acima seja removido por engano.
+Options -Indexes

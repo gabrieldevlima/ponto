@@ -1,0 +1,219 @@
+INDICE RAPIDO DE REFERENCIA - SCHEMA V2
+========================================
+
+ARQUIVOS DE DOCUMENTACAO
+========================
+
+1. README_v2_SCHEMA.md
+   - Sumario executivo (este arquivo)
+   - O que mudou de v1 para v2
+   - Proximos passos
+   - Integracao com codigo v2
+
+2. _v2_expected_schema.md
+   - Sumario tecnico detalhado
+   - Tabelas criadas/modificadas com definicoes SQL
+   - Indices criticos
+   - Checklist de migracao
+
+3. _v2_schema_details.txt
+   - Descricao linha-a-linha de cada coluna nova
+   - Razao de cada alteracao
+   - App settings criadas (27 novos keys)
+   - Issues potenciais e solucoes
+
+TABELAS NOVAS (9)
+=================
+
+1. teacher_trusted_devices
+   - FK: teachers.id
+   - Indexes: uk_teacher_fp, uk_ttd_device_token, idx_teacher_active
+   - Backfilled: ~140 devices com 3+ check-ins
+
+2. attendance_edits
+   - FK: attendance.id, admins.id
+   - Audit de cada edicao
+
+3. audit_logs
+   - FK: admins.id
+   - Log de acoes admin
+
+4. auth_attempt_logs
+   - FK: teachers.id (nullable)
+   - Log de tentativas de auth
+
+5. liveness_nonces
+   - FK: teachers.id
+   - Desafios unicos para vivacidade (5 min lifetime)
+
+6. fraud_detection_log
+   - FK: attendance.id, teachers.id
+   - Log de fraudes detectadas
+
+7. class_periods
+   - FK: schools.id (nullable)
+   - Grade horaria da instituicao
+   - Data: 10 periodos globais inseridos
+
+8. teacher_class_assignments
+   - FK: teachers.id, class_periods.id, schools.id
+   - Atribui professor a periodos
+
+9. permissions
+   - FK: admins.id
+   - Controle granular de acesso (ainda nao integrado)
+
+TABELAS MODIFICADAS (3)
+=======================
+
+1. attendance (+28 colunas)
+   - Colunas: client_id, nsr, device_fingerprint, liveness_score, etc
+   - Indices: 16 novos
+   - FK nova: class_period_id -> class_periods.id
+
+2. teachers (+5 colunas)
+   - Colunas: pin_hash, pin_changed_at, face_enrolled_at, face_enrollment_version, pin_self_enroll_allowed
+
+3. applied_migrations (+4 colunas)
+   - Colunas: content_sha, duration_ms, statement_count, failure_reason
+   - Telemetria de migrations
+
+INDICES CRITICOS (20+)
+======================
+
+ATTENDANCE:
+- uk_attendance_client_id UNIQUE
+- uk_attendance_checkout_client_id UNIQUE
+- idx_attendance_nsr
+- idx_attendance_teacher_date
+- idx_attendance_school_date
+- idx_attendance_date
+- idx_attendance_fraud
+- idx_attendance_method
+- idx_attendance_approved
+- idx_attendance_teacher_date_seq
+- idx_attendance_period
+- idx_attendance_offline_delay
+- idx_attendance_liveness
+- idx_att_overtime_candidate
+- idx_attendance_device_fp
+
+OUTROS:
+- applied_migrations.uk_applied_migrations_filename UNIQUE
+- audit_logs.idx_audit_logs_entity, idx_audit_logs_action
+- auth_attempt_logs.idx_auth_attempts_ip, idx_auth_attempts_identifier
+- liveness_nonces.idx_liveness_nonces_teacher, idx_liveness_nonces_created
+- attendance_edits.idx_attendance_edits_attendance, idx_attendance_edits_admin
+- teachers.idx_teachers_active, idx_teachers_cpf
+- class_periods.idx_period_school, idx_period_active
+- teacher_class_assignments.idx_assignment_teacher, idx_assignment_period
+
+APP SETTINGS CRIADAS (27)
+========================
+
+PIN (5):
+- pin_length=6
+- pin_max_failures_window=10
+- pin_rate_limit_window_sec=300
+- pin_max_attempts_30min=20
+- pin_stepup_after_reset_hours=24
+
+TRUSTED DEVICES (4):
+- trusted_device_inactive_days=90
+- trusted_device_max_per_teacher=5
+- trusted_device_repeat_threshold=3
+- trusted_device_repeat_window_days=7
+
+OVERTIME (5):
+- overtime_tolerance_minutes=30
+- overtime_requires_justification=1
+- overtime_auto_approve=0
+- overtime_multiplier=1.5
+- overtime_max_daily_hours=4
+
+LIVENESS (4):
+- liveness_enabled=1
+- liveness_min_movement=0.002
+- liveness_min_frames=6
+- liveness_challenge_timeout_s=5
+
+FACE (1):
+- face_reenroll_days=180
+
+OUTROS (3):
+- adaptive_time_check=0
+- gps_fallback_enabled
+- gps_fallback_distance_km
+
+MIGRATIONS ARQUIVO (33)
+=======================
+
+Data:
+add_admins_cpf.sql (Apr 11)
+add_attendance_checkout_client_id.sql (Apr 26)
+add_attendance_client_id.sql (Apr 19)
+add_attendance_edit_tracking.sql (Mar 19)
+add_attendance_edits_table.sql (Mar 19)
+add_audit_logs_table.sql (Mar 19)
+add_class_period_system.sql (Mar 19)
+add_client_recorded_at.sql (Apr 25)
+add_device_token.sql (Apr 20)
+add_face_enrollment_tracking.sql (Mar 23)
+add_gps_fallback_settings.sql (Apr 25)
+add_liveness_columns.sql (Mar 23)
+add_liveness_nonce_dedup.sql (Mar 23)
+add_manual_tracking_columns.sql (Mar 19)
+add_overtime_support.sql (Mar 19)
+add_pending_reasons.sql (Mar 19)
+add_pending_reasons_simple.sql (Mar 19)
+add_photo_deleted_flag.sql (Mar 19)
+add_photo_deleted_flag_simple.sql (Mar 19)
+add_pin_and_trusted_devices.sql (Apr 19)
+backfill_trusted_devices_2026_04_27.sql (Apr 27) [BACKFILL]
+consolidate_schema_2026_04.sql (Apr 26) [CONSOLIDACAO]
+fix_attendance_manual.sql (Mar 19)
+fix_audit_logs_nullable_admin.sql (Apr 19)
+fix_collation_production.sql (Mar 19)
+fix_face_recognition_thresholds.sql (Mar 19)
+fix_missing_tables_and_columns.sql (Mar 19)
+harden_auth_and_attendance_schema.sql (Apr 11)
+harden_face_recognition_v3.sql (Mar 24)
+remove_pin_hash.sql (Apr 11)
+set_face_thresholds_3rd_layer.sql (Apr 25)
+unify_face_thresholds.sql (Mar 23)
+update_face_thresholds_hardened.sql (Mar 23)
+
+CRITICAS PARA MIGRACAO V1 -> V2
+===============================
+
+COLUNAS INDISPECIVEIS EM ATTENDANCE:
+- nsr BIGINT UNIQUE (necessario para ordem global)
+- client_id, checkout_client_id (idempotencia offline)
+- fraud_risk_level, gps_mock_detected (seguranca)
+- device_fingerprint (multi-device support)
+
+TABELAS INDISPENSAVEIS:
+- teacher_trusted_devices (trusted device logic)
+- attendance_edits (audit trail)
+- audit_logs (rastreability)
+- auth_attempt_logs (seguranca)
+- class_periods + teacher_class_assignments (multiplos periods)
+
+CHECKLIST RAPIDO
+================
+
+[ ] 1. Criar 9 tabelas novas
+[ ] 2. Adicionar 28 colunas em attendance
+[ ] 3. Adicionar 5 colunas em teachers
+[ ] 4. Adicionar 4 colunas em applied_migrations
+[ ] 5. Criar 20+ indices
+[ ] 6. Backfill ~140 trusted_devices
+[ ] 7. Validar FKs
+[ ] 8. Verificar collation utf8mb4_unicode_ci
+[ ] 9. Testar helpers.php::run_auto_migrations()
+[ ] 10. Testar API checkin com client_id, nsr, device_fingerprint
+
+---
+
+Gerado: 2026-04-27
+Indice rapido de referencia do schema v2.0

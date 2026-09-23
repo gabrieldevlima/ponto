@@ -1,0 +1,52 @@
+{
+  "ci": {
+    "collect": {
+      "url": [
+        "http://localhost/ponto_ribeira/public/admin/login.php",
+        "http://localhost/ponto_ribeira/public/admin/dashboard.php",
+        "http://localhost/ponto_ribeira/public/admin/teachers.php",
+        "http://localhost/ponto_ribeira/public/admin/attendances.php",
+        "http://localhost/ponto_ribeira/public/admin/leaves.php",
+        "http://localhost/ponto_ribeira/public/admin/reports_insights.php",
+        "http://localhost/ponto_ribeira/public/admin/reports.php",
+        "http://localhost/ponto_ribeira/public/admin/reports_financial.php",
+        "http://localhost/ponto_ribeira/public/admin/audit_log.php",
+        "http://localhost/ponto_ribeira/public/admin/migrations.php"
+      ],
+      "numberOfRuns": 1,
+      "puppeteerScript": "./lighthouserc.login.js",
+      "settings": {
+        "preset": "desktop",
+        "onlyCategories": ["accessibility", "best-practices", "seo"],
+        "skipAudits": [
+          "uses-http2",
+          "is-on-https",
+          "redirects-http",
+          "csp-xss",
+          "uses-passive-event-listeners"
+        ]
+      }
+    },
+    "assert": {
+      "assertions": {
+        "categories:accessibility": ["error", { "minScore": 0.90 }],
+        "categories:best-practices": ["warn", { "minScore": 0.85 }],
+        "categories:seo": ["warn", { "minScore": 0.80 }],
+        "categories:performance": "off",
+        "uses-http2": "off",
+        "is-on-https": "off",
+        "redirects-http": "off",
+        "csp-xss": "off",
+        "color-contrast": ["error", { "minScore": 1 }],
+        "html-has-lang": ["error", { "minScore": 1 }],
+        "valid-lang": ["error", { "minScore": 1 }],
+        "label": ["error", { "minScore": 1 }],
+        "image-alt": ["error", { "minScore": 1 }],
+        "tap-targets": ["warn", { "minScore": 0.9 }]
+      }
+    },
+    "upload": {
+      "target": "temporary-public-storage"
+    }
+  }
+}

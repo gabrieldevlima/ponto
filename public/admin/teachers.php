@@ -24,10 +24,27 @@ function sanitize_int_or_null($v)
   return (isset($v) && is_numeric($v)) ? (int)$v : null;
 }
 
-// Messages
+// Messages (feedback após salvar colaborador, toggle status, etc.)
 $messages = [];
 if (!empty($_GET['msg'])) {
-  $messages[] = htmlspecialchars($_GET['msg'], ENT_QUOTES, 'UTF-8');
+  $messages[] = [
+    'text' => esc($_GET['msg'], ENT_QUOTES, 'UTF-8'),
+    'type' => ($_GET['msg_type'] ?? '') === 'success' ? 'success' : (($_GET['msg_type'] ?? '') === 'danger' ? 'danger' : 'info'),
+  ];
+}
+
+// Aviso de primeiro acesso pendente. Quem acaba de ser cadastrado nasce sem PIN
+// e sem face e, pela política de api/pin_enroll.php, é barrado ao tentar bater
+// ponto até o admin liberar — o colaborador vê "procure o administrador" e o
+// admin não ficava sabendo de nada. O id vem do redirect de teachers_save.php;
+// o estado é reconferido no banco para não avisar à toa em refresh ou link velho.
+$avisoPrimeiroAcesso = null;
+$pinPendingId = sanitize_int_or_null($_GET['pin_pending'] ?? null);
+if ($pinPendingId && teacher_first_access_pending($pdo, $pinPendingId)) {
+  list($avisoScopeSql, $avisoScopeParams) = admin_scope_where('t');
+  $stAviso = $pdo->prepare("SELECT t.id, t.name, t.cpf FROM teachers t WHERE t.id = ? AND {$avisoScopeSql} LIMIT 1");
+  $stAviso->execute(array_merge([$pinPendingId], $avisoScopeParams));
+  $avisoPrimeiroAcesso = $stAviso->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 
 // Toggle status (POST + CSRF)
@@ -50,6 +67,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggl
   $ok = $stmt->execute([$id]);
   audit_log('update', 'teacher', $id, ['toggle_active' => true, 'result' => $ok]);
   header('Location: ' . keep_params(['msg' => $ok ? 'Status alterado com sucesso' : 'Erro ao alterar status']));
+  exit;
+}
+
+// Inativar / Reativar colaborador (auditável, com motivo). POST + CSRF.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['deactivate', 'reactivate'], true)) {
+  $id = sanitize_int_or_null($_POST['id'] ?? null);
+  $token = $_POST['csrf'] ?? '';
+  if (!$id || !hash_equals($_SESSION['csrf_token'], $token)) {
+    header('Location: ' . keep_params(['msg' => 'Requisição inválida', 'msg_type' => 'danger']));
+    exit;
+  }
+  $active = ($_POST['action'] === 'reactivate');
+  $reason = trim((string)($_POST['reason'] ?? ''));
+  try {
+    $r = admin_set_collaborator_active($pdo, $id, (int)$admin['id'], $active, $reason);
+    $msg = $active ? 'Colaborador reativado.' : 'Colaborador inativado.';
+    header('Location: ' . keep_params(['msg' => $r['changed'] ? $msg : 'O status já estava assim.', 'msg_type' => 'success']));
+  } catch (RuntimeException $e) {
+    header('Location: ' . keep_params(['msg' => $e->getMessage(), 'msg_type' => 'danger']));
+  } catch (Throwable $e) {
+    error_log('[teachers set_active] ' . $e->getMessage());
+    header('Location: ' . keep_params(['msg' => 'Falha ao alterar status.', 'msg_type' => 'danger']));
+  }
   exit;
 }
 
@@ -123,10 +163,14 @@ if ($page > $totalPages) {
 $perPage = (int)$perPage;
 $offset = (int)$offset;
 $listSql = "
-  SELECT t.*, ct.name AS type_name
+  SELECT t.*, ct.name AS type_name,
+         GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ') as schools_list
   FROM teachers t
   LEFT JOIN collaborator_types ct ON ct.id = t.type_id
+  LEFT JOIN teacher_schools ts ON ts.teacher_id = t.id
+  LEFT JOIN schools s ON s.id = ts.school_id AND s.active = 1
   $whereSql
+  GROUP BY t.id
   ORDER BY $sortCol $dir
   LIMIT $perPage OFFSET $offset
 ";
@@ -148,7 +192,7 @@ function sort_link(string $key, string $label): string
   if ($currSort === $key) {
     $icon = $currDir === 'asc' ? '▲' : '▼';
   }
-  return '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" class="text-decoration-none">' . $label . ' ' . $icon . '</a>';
+  return '<a href="' . esc($url, ENT_QUOTES, 'UTF-8') . '" class="text-decoration-none">' . $label . ' ' . $icon . '</a>';
 }
 ?>
 <!doctype html>
@@ -160,81 +204,40 @@ function sort_link(string $key, string $label): string
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+  <link rel="stylesheet" href="css/admin.css">
   <link rel="shortcut icon" href="../img/icone-2.ico" type="image/x-icon">
   <link rel="icon" href="../img/icone-2.ico" type="image/x-icon">
-  <style>
-    .table-actions .btn {
-      margin-right: .25rem;
-      margin-bottom: .25rem;
-    }
-
-    @media (max-width: 575.98px) {
-      .table-responsive {
-        font-size: .95rem;
-      }
-
-      .table-actions {
-        display: flex;
-        flex-direction: column;
-        gap: .25rem;
-      }
-    }
-  </style>
 </head>
 
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
-    <div class="container-fluid">
-      <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="dashboard.php">
-        <img src="../img/logo.png" alt="Logo da Empresa" style="height:auto;max-width:130px;">
-      </a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#adminNavbar"><span class="navbar-toggler-icon"></span></button>
-      <div class="collapse navbar-collapse" id="adminNavbar">
-        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-          <li class="nav-item"><a class="nav-link" href="dashboard.php"><i class="bi bi-house"></i> Início</a></li>
-          <li class="nav-item"><a class="nav-link" href="attendances.php"><i class="bi bi-calendar-check"></i> Registros de Ponto</a></li>
-          <li class="nav-item"><a class="nav-link active" href="teachers.php"><i class="bi bi-person-badge"></i> Colaboradores</a></li>
-          <li class="nav-item"><a class="nav-link" href="leaves.php"><i class="bi bi-person-x"></i> Afastamentos</a></li>
-          <?php if (is_network_admin($admin)): ?>
-            <li class="nav-item"><a class="nav-link" href="schools.php"><i class="bi bi-building"></i> Instituições</a></li>
-            <li class="nav-item"><a class="nav-link" href="admins.php"><i class="bi bi-people"></i> Administradores</a></li>
-          <?php endif; ?>
-          <li class="nav-item"><a class="nav-link" href="attendance_manual.php"><i class="bi bi-plus-circle"></i> Inserir Ponto Manual</a></li>
-        </ul>
-        <span class="navbar-text me-3 d-none d-lg-inline">
-          <i class="bi bi-person-circle"></i>
-          <?= esc($_SESSION['admin_name'] ?? 'Administrador') ?>
-        </span>
-        <a href="logout.php" class="btn btn-outline-light"><i class="bi bi-box-arrow-right"></i> Sair</a>
-      </div>
-    </div>
-  </nav>
+  <?php include __DIR__ . '/_navbar.php'; ?>
 
-  <div class="container-fluid">
-    <div class="card rounded-3 border bg-body mb-4">
-      <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
-        <div class="d-flex align-items-center gap-3">
-          <div class="bg-primary-subtle text-primary rounded-circle d-inline-flex align-items-center justify-content-center" style="width:3rem;height:3rem;">
-            <i class="bi bi-person-badge fs-4"></i>
-          </div>
-          <div>
-            <h3 class="mb-0">Gerenciamento de Colaboradores</h3>
-            <small class="text-muted"><i class="bi bi-people me-1"></i>
-              <?= (int)$totalTeachers ?> cadastrados</small>
-          </div>
+  <div class="container-fluid admin-content">
+    <div class="app-page-header">
+      <div class="app-page-header__main">
+        <div class="app-page-icon"><i class="bi bi-person-badge"></i></div>
+        <div>
+          <h1 class="app-page-title">Gerenciamento de Colaboradores</h1>
+          <p class="app-page-subtitle"><i class="bi bi-people me-1"></i><?= (int)$totalTeachers ?> cadastrado(s)</p>
         </div>
-        <div class="d-flex align-items-center gap-2">
-          <a href="teacher_edit.php" class="btn btn-success">
-            <i class="bi bi-person-plus-fill"></i>
-            <span class="d-none d-sm-inline">Novo Colaborador</span>
-            <span class="d-inline d-sm-none">Novo</span>
-          </a>
-        </div>
+      </div>
+      <div class="d-flex gap-2">
+        <?php if (is_network_admin($admin)): ?>
+        <a href="import_pis.php" class="btn btn-outline-secondary" aria-label="Importar dados contratuais em massa">
+          <i class="bi bi-upload me-1"></i>
+          <span class="d-none d-sm-inline">Importar cadastro</span>
+        </a>
+        <?php endif; ?>
+        <a href="teacher_edit.php" class="btn btn-success" aria-label="Cadastrar novo colaborador">
+          <i class="bi bi-person-plus-fill me-1"></i>
+          <span class="d-none d-sm-inline">Novo Colaborador</span>
+          <span class="d-inline d-sm-none">Novo</span>
+        </a>
       </div>
     </div>
     <form class="row g-2 mb-4" method="get" action="teachers.php">
       <div class="col-12 col-md-4">
-        <input type="text" name="q" class="form-control" placeholder="Buscar por nome, email ou CPF" value="<?= esc($q) ?>">
+        <input type="text" name="q" class="form-control" placeholder="Buscar por nome ou CPF" value="<?= esc($q) ?>">
       </div>
       <div class="col-6 col-md-3">
         <select name="type_id" class="form-select">
@@ -260,35 +263,72 @@ function sort_link(string $key, string $label): string
     </form>
 
     <?php foreach ($messages as $msg): ?>
-      <div class="alert alert-info"><?= $msg ?></div>
+      <?php
+        $alertClass = 'alert-' . ($msg['type'] ?? 'info');
+        $icon = ($msg['type'] ?? '') === 'success' ? ' <span class="glyphicon glyphicon-ok-sign" aria-hidden="true"></span> ' : '';
+      ?>
+      <div class="alert <?= $alertClass ?> alert-dismissible fade show" role="alert">
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Fechar"></button>
+        <?= $icon ?><?= $msg['text'] ?>
+      </div>
     <?php endforeach; ?>
 
-    <div class="table-responsive mb-3">
-      <table class="table table-bordered align-middle table-hover">
-        <thead class="table-light">
+    <?php if ($avisoPrimeiroAcesso): ?>
+      <div class="alert alert-warning d-flex flex-column flex-md-row align-items-md-center gap-3" role="alert">
+        <div class="flex-fill">
+          <strong><i class="bi bi-exclamation-triangle"></i> Falta liberar o primeiro acesso</strong><br>
+          <?= esc($avisoPrimeiroAcesso['name']) ?> ainda não tem PIN nem foto cadastrada. Enquanto isso,
+          o sistema recusa o primeiro acesso dele com a mensagem &ldquo;precisa ser liberado pelo
+          administrador&rdquo; e ele não consegue bater ponto.
+        </div>
+        <a class="btn btn-warning text-nowrap"
+           href="teacher_pin_manage.php?q=<?= urlencode(preg_replace('/\D/', '', (string)$avisoPrimeiroAcesso['cpf'])) ?>">
+          <i class="bi bi-key"></i> Liberar primeiro acesso
+        </a>
+      </div>
+    <?php endif; ?>
+
+    <section class="app-section-card app-table-card">
+      <header class="app-section-card__header">
+        <span class="app-section-card__eyebrow" aria-hidden="true"><i class="bi bi-people"></i>Lista</span>
+        <h2 class="app-section-card__title">Colaboradores</h2>
+      </header>
+      <div class="table-responsive">
+      <table class="table align-middle mb-0">
+        <thead>
           <tr>
-            <th><?= sort_link('name', 'Nome') ?></th>
-            <th><?= sort_link('cpf', 'CPF') ?></th>
-            <th><?= sort_link('email', 'Email') ?></th>
-            <th><?= sort_link('type', 'Tipo') ?></th>
-            <th><?= sort_link('institution', 'Instituição') ?></th>
-            <th class="text-center"><?= sort_link('status', 'Status') ?></th>
-            <th class="text-center" style="min-width: 420px;">Ações</th>
+            <th scope="col"><?= sort_link('name', 'Nome') ?></th>
+            <th scope="col"><?= sort_link('cpf', 'CPF') ?></th>
+            <th scope="col"><?= sort_link('type', 'Tipo') ?></th>
+            <th scope="col" class="text-center"><?= sort_link('status', 'Status') ?></th>
+            <th scope="col" class="text-center" style="width: 80px;">Ações</th>
           </tr>
         </thead>
         <tbody>
           <?php if (empty($teachers)): ?>
             <tr>
-              <td colspan="7" class="text-center text-muted">Nenhum colaborador encontrado.</td>
+              <td colspan="5" class="text-center text-muted">Nenhum colaborador encontrado.</td>
             </tr>
           <?php else: ?>
             <?php foreach ($teachers as $t): ?>
               <tr>
-                <td><?= esc($t['name']) ?></td>
+                <td>
+                  <?= esc(mb_convert_case($t['name'], MB_CASE_TITLE, 'UTF-8')) ?>
+                  <?php
+                    // Badge de status do cadastro facial
+                    $hasFace = !empty($t['face_descriptors']) && $t['face_descriptors'] !== '[]';
+                    $reenrollDays = (int)(get_setting('face_reenroll_days', '180') ?? '180');
+                    if (!$hasFace): ?>
+                    <span class="badge bg-secondary ms-1" title="Sem cadastro facial"><i class="bi bi-camera-video-off"></i></span>
+                  <?php elseif (!empty($t['face_enrolled_at'])):
+                      $enrolledAt = new DateTime($t['face_enrolled_at']);
+                      $daysSince = (int)$enrolledAt->diff(new DateTime())->days;
+                      if ($daysSince > $reenrollDays): ?>
+                    <span class="badge bg-warning text-dark ms-1" title="Cadastro facial desatualizado (<?= $daysSince ?> dias)"><i class="bi bi-exclamation-triangle"></i></span>
+                  <?php endif; endif; ?>
+                </td>
                 <td><?= esc($t['cpf']) ?></td>
-                <td><?= esc($t['email']) ?></td>
                 <td><?= esc($t['type_name'] ?? 'Não definido') ?></td>
-                <td><?= esc($t['institution'] ?? $t['school_name'] ?? $t['network_name'] ?? 'Rede de Ensino') ?></td>
                 <td class="text-center">
                   <?php if ((int)$t['active'] === 1): ?>
                     <span class="badge bg-success">Ativo</span>
@@ -297,67 +337,101 @@ function sort_link(string $key, string $label): string
                   <?php endif; ?>
                 </td>
                 <td class="text-center table-actions">
-                  <a href="teacher_edit.php?id=<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-primary" title="Editar">
-                    <i class="bi bi-pencil"></i> <span class="d-none d-md-inline">Editar</span>
-                  </a>
-
-                  <form action="<?= htmlspecialchars(keep_params(), ENT_QUOTES, 'UTF-8') ?>" method="post" class="d-inline">
-                    <input type="hidden" name="action" value="toggle">
-                    <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
-                    <input type="hidden" name="csrf" value="<?= esc($csrf) ?>">
-                    <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('Alterar status deste colaborador?')" title="Ativar/Desativar">
-                      <i class="bi bi-power"></i>
-                      <span class="d-none d-md-inline"><?= ((int)$t['active'] === 1) ? 'Desativar' : 'Ativar' ?></span>
+                  <div class="dropdown teachers-actions-dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" aria-expanded="false" aria-haspopup="true" aria-label="Ações">
+                      <i class="bi bi-three-dots-vertical"></i>
                     </button>
-                  </form>
-
-                  <a href="teacher_pin_reset.php?id=<?= (int)$t['id'] ?>" class="btn btn-sm btn-outline-danger" onclick="return confirm('Resetar o PIN desse colaborador?')" title="Resetar PIN">
-                    <i class="bi bi-key"></i> <span class="d-none d-md-inline">Resetar PIN</span>
-                  </a>
-
-                  <a href="teacher_monthly_report.php?teacher_id=<?= (int)$t['id'] ?>&month=<?= date('Y-m') ?>" class="btn btn-sm btn-outline-info" title="Relatório Mensal">
-                    <i class="bi bi-bar-chart-line"></i> <span class="d-none d-md-inline">Relatório</span>
-                  </a>
-
-                  <a href="reports_financial.php?teacher_id=<?= (int)$t['id'] ?>&month=<?= date('Y-m') ?>" class="btn btn-sm btn-outline-success" title="Financeiro">
-                    <i class="bi bi-cash-coin"></i> <span class="d-none d-md-inline">Financeiro</span>
-                  </a>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                      <li>
+                        <a href="teacher_edit.php?id=<?= (int)$t['id'] ?>" class="dropdown-item text-primary">
+                          <i class="bi bi-pencil me-2"></i> Editar
+                        </a>
+                      </li>
+                      <li>
+                        <a href="teacher_monthly_report.php?teacher_id=<?= (int)$t['id'] ?>&month=<?= date('Y-m') ?>" class="dropdown-item text-info">
+                          <i class="bi bi-bar-chart-line me-2"></i> Relatório Mensal
+                        </a>
+                      </li>
+                      <li>
+                        <a href="reports_financial.php?teacher_id=<?= (int)$t['id'] ?>&month=<?= date('Y-m') ?>" class="dropdown-item text-success">
+                          <i class="bi bi-cash-coin me-2"></i> Financeiro
+                        </a>
+                      </li>
+                      <li><hr class="dropdown-divider"></li>
+                      <li>
+                        <?php if ((int)$t['active'] === 1): ?>
+                        <form action="<?= esc(keep_params(), ENT_QUOTES, 'UTF-8') ?>" method="post" class="m-0 p-0"
+                              onsubmit="var m=prompt('Inativar este colaborador? Ele deixa de aparecer e não bate ponto, mas o histórico é preservado (reversível).\n\nMotivo (obrigatório):'); if(!m||!m.trim())return false; this.reason.value=m.trim(); return true;">
+                          <input type="hidden" name="action" value="deactivate">
+                          <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
+                          <input type="hidden" name="reason" value="">
+                          <input type="hidden" name="csrf" value="<?= esc($csrf) ?>">
+                          <button type="submit" class="dropdown-item text-danger fw-semibold">
+                            <i class="bi bi-person-x me-2"></i> Inativar (remover)
+                          </button>
+                        </form>
+                        <?php else: ?>
+                        <form action="<?= esc(keep_params(), ENT_QUOTES, 'UTF-8') ?>" method="post" class="m-0 p-0"
+                              onsubmit="return confirm('Reativar este colaborador?')">
+                          <input type="hidden" name="action" value="reactivate">
+                          <input type="hidden" name="id" value="<?= (int)$t['id'] ?>">
+                          <input type="hidden" name="csrf" value="<?= esc($csrf) ?>">
+                          <button type="submit" class="dropdown-item text-success fw-semibold">
+                            <i class="bi bi-person-check me-2"></i> Reativar
+                          </button>
+                        </form>
+                        <?php endif; ?>
+                      </li>
+                    </ul>
+                  </div>
                 </td>
               </tr>
             <?php endforeach; ?>
           <?php endif; ?>
         </tbody>
       </table>
-    </div>
-
-    <?php if ($totalPages > 1): ?>
-      <nav aria-label="Paginação">
-        <ul class="pagination justify-content-center flex-wrap">
-          <?php
-          $prevDisabled = $page <= 1 ? ' disabled' : '';
-          $nextDisabled = $page >= $totalPages ? ' disabled' : '';
-          ?>
-          <li class="page-item<?= $prevDisabled ?>">
-            <a class="page-link" href="<?= htmlspecialchars(keep_params(['page' => max(1, $page - 1)]), ENT_QUOTES, 'UTF-8') ?>">«</a>
-          </li>
-          <?php for ($p = 1; $p <= $totalPages; $p++): ?>
-            <li class="page-item<?= $p == $page ? ' active' : '' ?>">
-              <a class="page-link" href="<?= htmlspecialchars(keep_params(['page' => $p]), ENT_QUOTES, 'UTF-8') ?>"><?= $p ?></a>
-            </li>
-          <?php endfor; ?>
-          <li class="page-item<?= $nextDisabled ?>">
-            <a class="page-link" href="<?= htmlspecialchars(keep_params(['page' => min($totalPages, $page + 1)]), ENT_QUOTES, 'UTF-8') ?>">»</a>
-          </li>
-        </ul>
-      </nav>
-    <?php endif; ?>
-
-    <div class="text-center my-5">
-      <a href="dashboard.php" class="btn btn-outline-primary rounded-pill px-4 py-2 shadow-sm">
-        <i class="bi bi-arrow-left-circle me-2"></i> Voltar ao Painel
-      </a>
-    </div>
+      </div>
+      <?php if ($totalPages > 1): ?>
+        <div class="app-table-card__footer">
+          <nav aria-label="Paginação">
+            <ul class="pagination pagination-sm mb-0">
+              <?php
+              $prevDisabled = $page <= 1 ? ' disabled' : '';
+              $nextDisabled = $page >= $totalPages ? ' disabled' : '';
+              ?>
+              <li class="page-item<?= $prevDisabled ?>">
+                <a class="page-link" href="<?= esc(keep_params(['page' => max(1, $page - 1)])) ?>" aria-label="Anterior">«</a>
+              </li>
+              <?php for ($p = 1; $p <= $totalPages; $p++): ?>
+                <li class="page-item<?= $p == $page ? ' active' : '' ?>">
+                  <a class="page-link" href="<?= esc(keep_params(['page' => $p])) ?>"><?= $p ?></a>
+                </li>
+              <?php endfor; ?>
+              <li class="page-item<?= $nextDisabled ?>">
+                <a class="page-link" href="<?= esc(keep_params(['page' => min($totalPages, $page + 1)])) ?>" aria-label="Próximo">»</a>
+              </li>
+            </ul>
+          </nav>
+          <span class="text-muted small">Página <?= $page ?> de <?= $totalPages ?></span>
+        </div>
+      <?php endif; ?>
+    </section>
   </div>
+    <?php include __DIR__ . '/../_footer.php'; ?>
 </body>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function() {
+  if (typeof bootstrap === 'undefined') return;
+  document.querySelectorAll('.teachers-actions-dropdown .dropdown-toggle').forEach(function(btn) {
+    var dd = new bootstrap.Dropdown(btn, { popperConfig: { strategy: 'fixed' } });
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      dd.toggle();
+    });
+  });
+})();
+</script>
 
 </html>

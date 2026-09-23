@@ -27,7 +27,7 @@ list($scopeSql, $scopeParams) = admin_scope_where('t');
 $selectedTeacher = null;
 $mode = 'classes';
 if ($teacherId) {
-  $st = $pdo->prepare("SELECT t.id, t.name, t.base_salary, ct.schedule_mode
+  $st = $pdo->prepare("SELECT t.id, t.name, t.base_salary, t.created_at, ct.schedule_mode
                        FROM teachers t
                        LEFT JOIN collaborator_types ct ON ct.id = t.type_id
                        WHERE t.id = ? AND $scopeSql");
@@ -54,13 +54,23 @@ if ($selectedTeacher) {
       $scheduleMap[(int)$r['weekday']] = ['cc' => (int)$r['classes_count'], 'cm' => (int)$r['class_minutes']];
     }
   } elseif ($mode === 'time') {
-    $st = $pdo->prepare("SELECT weekday, start_time, end_time, break_minutes FROM collaborator_time_schedules WHERE teacher_id = ?");
+    $st = $pdo->prepare("SELECT weekday, start_time, end_time, end_next_day, break_minutes FROM collaborator_time_schedules WHERE teacher_id = ?");
     $st->execute([$selectedTeacher['id']]);
     while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
       $scheduleMap[(int)$r['weekday']] = [
         'start' => $r['start_time'],
         'end' => $r['end_time'],
+        'end_next_day' => (int)($r['end_next_day'] ?? 0),
         'break' => (int)$r['break_minutes']
+      ];
+    }
+  } elseif ($mode === 'hours') {
+    $st = $pdo->prepare("SELECT weekday, total_minutes, break_minutes FROM collaborator_hours_schedules WHERE teacher_id = ?");
+    $st->execute([$selectedTeacher['id']]);
+    while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+      $scheduleMap[(int)$r['weekday']] = [
+        'total' => (int)$r['total_minutes'],
+        'break' => (int)$r['break_minutes'],
       ];
     }
   }
@@ -69,34 +79,57 @@ if ($selectedTeacher) {
 // Per-day skeleton
 $totalExpectedMin = 0;
 $daily = [];
+// Escola do colaborador → captura feriados específicos da escola E os da rede.
+// Passar null aqui (bug antigo) ignorava feriados com school_id definido.
+$reportSchoolId = $selectedTeacher ? primary_school_id_for_teacher($pdo, (int)$selectedTeacher['id']) : null;
+$holidays = get_holidays_in_period($pdo, $periodStart->format('Y-m-d'), $periodEnd->format('Y-m-d'), $reportSchoolId);
+
 for ($d = clone $periodStart; $d <= $periodEnd; $d = $d->modify('+1 day')) {
   $dateStr = $d->format('Y-m-d');
   $w = (int)$d->format('w');
   $exp = 0;
-  if ($selectedTeacher && isset($scheduleMap[$w])) {
+  
+  // Verifica se é dia útil (considerando feriados e exceções)
+  $isWorkday = is_working_day($pdo, $dateStr, $reportSchoolId);
+  
+  if ($selectedTeacher && isset($scheduleMap[$w]) && $isWorkday) {
     if ($mode === 'classes') {
       $exp = ($scheduleMap[$w]['cc'] ?? 0) * ($scheduleMap[$w]['cm'] ?? 0);
     } elseif ($mode === 'time') {
       $start = $scheduleMap[$w]['start'] ?? null;
       $end   = $scheduleMap[$w]['end'] ?? null;
       $break = (int)($scheduleMap[$w]['break'] ?? 0);
+      $endNext = (int)($scheduleMap[$w]['end_next_day'] ?? 0);
       if ($start && $end) {
-        $s = DateTime::createFromFormat('H:i:s', $start);
-        $e = DateTime::createFromFormat('H:i:s', $end);
-        if ($s && $e) {
-          if ($e <= $s) $e = (clone $e)->modify('+1 day');
-          $exp = max(0, (int)(($e->getTimestamp() - $s->getTimestamp()) / 60) - $break);
-        }
+        $win = compute_schedule_window([
+          'start_time' => $start,
+          'end_time' => $end,
+          'end_next_day' => $endNext,
+          'break_minutes' => $break,
+        ], $dateStr);
+        // Janela completa — break_minutes não é descontado (intervalo conta
+        // como tempo trabalhado; modelo "cheio vs cheio").
+        if ($win) $exp = max(0, (int)(($win['end']->getTimestamp() - $win['start']->getTimestamp()) / 60));
       }
+    } elseif ($mode === 'hours') {
+      $exp = max(0, (int)($scheduleMap[$w]['total'] ?? 0));
     }
   }
-  $daily[$dateStr] = ['expectedMin' => $exp, 'workedMin' => 0, 'items' => []];
+  
+  $daily[$dateStr] = [
+    'expectedMin' => $exp, 
+    'workedMin' => 0, 
+    'items' => [], 
+    'leaves' => [],
+    'holiday' => isset($holidays[$dateStr]) ? $holidays[$dateStr] : null
+  ];
   $totalExpectedMin += $exp;
 }
 
 // Afastamentos aprovados (paid => expected=0)
+$leaves = []; // Array para armazenar informações dos afastamentos
 if ($selectedTeacher) {
-  $stL = $pdo->prepare("SELECT l.*, lt.paid
+  $stL = $pdo->prepare("SELECT l.*, lt.paid, lt.name as leave_type_name
                         FROM leaves l
                         JOIN leave_types lt ON lt.id = l.type_id
                         WHERE l.teacher_id = ? AND l.approved = 1 AND l.end_date >= ? AND l.start_date <= ?");
@@ -106,39 +139,84 @@ if ($selectedTeacher) {
     $d1 = new DateTime($lv['end_date']);
     for ($d = clone $d0; $d <= $d1; $d = $d->modify('+1 day')) {
       $k = $d->format('Y-m-d');
-      if (!isset($daily[$k])) $daily[$k] = ['expectedMin' => 0, 'workedMin' => 0, 'items' => []];
-      if ((int)$lv['paid'] === 1) {
+      if (!isset($daily[$k])) $daily[$k] = ['expectedMin' => 0, 'workedMin' => 0, 'items' => [], 'leaves' => []];
+      
+      // Adiciona informações do afastamento ao dia
+      $daily[$k]['leaves'][] = [
+        'type' => $lv['leave_type_name'],
+        'paid' => (int)$lv['paid'],
+        'excuses_absence' => (int)($lv['excuses_absence'] ?? 0),
+        'description' => $lv['description'] ?? '',
+        'cid_code' => $lv['cid_code'] ?? '',
+        'id' => $lv['id']
+      ];
+      
+      if ((int)($lv['excuses_absence'] ?? 0) === 1) { // abona a falta → zera jornada
         $totalExpectedMin -= $daily[$k]['expectedMin'];
         $daily[$k]['expectedMin'] = 0;
       }
     }
+    
+    // Adiciona à lista de afastamentos para exibição separada
+    $leaves[] = $lv;
   }
 }
 
-// Registros de ponto do mês
+// Registros de ponto do mês (APENAS APROVADOS)
 if ($selectedTeacher) {
-  $st = $pdo->prepare("SELECT a.*, mr.name AS manual_reason_name
+  $st = $pdo->prepare("SELECT a.*, mr.name AS manual_reason_name, COALESCE(NULLIF(ed.name, ''), ed.username) AS edited_by_username
                        FROM attendance a
                        LEFT JOIN manual_reasons mr ON mr.id = a.manual_reason_id
-                       WHERE a.teacher_id = ? AND a.date BETWEEN ? AND ?
+                       LEFT JOIN admins ed ON ed.id = a.editado_por
+                       WHERE a.teacher_id = ? AND a.date BETWEEN ? AND ? AND a.approved = 1
                        ORDER BY a.date ASC, a.check_in ASC");
   $st->execute([$selectedTeacher['id'], $periodStart->format('Y-m-d'), $periodEnd->format('Y-m-d')]);
   while ($row = $st->fetch(PDO::FETCH_ASSOC)) {
     $d = $row['date'];
-    $worked = 0;
+    $minutes = 0;
     if (!empty($row['check_in']) && !empty($row['check_out'])) {
       $in = new DateTime($row['check_in']);
       $out = new DateTime($row['check_out']);
-      if ($out > $in) $worked = (int) round(($out->getTimestamp() - $in->getTimestamp()) / 60);
+      if ($out > $in) $minutes = (int) round(($out->getTimestamp() - $in->getTimestamp()) / 60);
     }
-    if (!isset($daily[$d])) $daily[$d] = ['expectedMin' => 0, 'workedMin' => 0, 'items' => []];
-    $daily[$d]['workedMin'] += $worked;
+    if (!isset($daily[$d])) $daily[$d] = ['expectedMin' => 0, 'workedMin' => 0, 'breakMin' => 0, 'items' => []];
+    if (!isset($daily[$d]['breakMin'])) $daily[$d]['breakMin'] = 0;
+    // Modelo "cheio vs cheio": o intervalo CONTA como tempo trabalhado —
+    // soma em workedMin (presença cheia) e também em breakMin (informativo).
+    if (($row['record_type'] ?? 'work') === 'break') {
+      $daily[$d]['breakMin'] += $minutes;
+      $daily[$d]['workedMin'] += $minutes;
+    } else {
+      $daily[$d]['workedMin'] += $minutes;
+    }
     $daily[$d]['items'][] = $row;
   }
 }
 
+// Janela de contagem: dias antes do início (config/cadastro) ou no futuro NÃO
+// contam — zera previsto/trabalhado/efetivo para que totais, saldo e faltas só
+// reflitam os dias contados (coerente com o relatório financeiro).
+$teacherStartDate = counting_start_for($selectedTeacher['created_at'] ?? null);
+$today = date('Y-m-d');
+$daily = apply_counting_window($daily, $teacherStartDate, $today, ['expectedMin', 'workedMin', 'effectiveMin']);
+$totalExpectedMin = (int) array_sum(array_column($daily, 'expectedMin'));
+
 $totalWorkedMin = array_sum(array_column($daily, 'workedMin'));
-$saldo = $totalWorkedMin - $totalExpectedMin;
+$totalBreakMin  = array_sum(array_map(static fn($d) => (int)($d['breakMin'] ?? 0), $daily));
+
+// Saldo usa EFETIVO canônico (helpers.php): presença cheia = work + break.
+$totalEffectiveMin = 0;
+if ($selectedTeacher) {
+    foreach ($daily as $date => $info) {
+        // Fora da janela de contagem: não soma (já zerado).
+        if ($date < $teacherStartDate || $date > $today) continue;
+        if ((int)$info['expectedMin'] === 0 && empty($info['items'])) continue;
+        $eff = calculate_effective_worked_minutes($pdo, (int)$selectedTeacher['id'], $date);
+        $totalEffectiveMin += $eff;
+        $daily[$date]['effectiveMin'] = $eff;
+    }
+}
+$saldo = $totalEffectiveMin - $totalExpectedMin;
 
 // Export PDF (Dompdf)
 if ($selectedTeacher && (isset($_GET['export']) && $_GET['export'] === 'pdf')) {
@@ -161,7 +239,6 @@ if ($selectedTeacher && (isset($_GET['export']) && $_GET['export'] === 'pdf')) {
   }
 }
 
-// Helper de URL preservando filtros
 function build_url_with(array $extra): string
 {
   $q = $_GET;
@@ -177,51 +254,28 @@ function build_url_with(array $extra): string
   <title>Relatório Mensal | DEEDO Ponto</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="css/admin.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
   <link rel="shortcut icon" href="../img/icone-2.ico" type="image/x-icon">
   <link rel="icon" href="../img/icone-2.ico" type="image/x-icon">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </head>
 
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
-    <div class="container-fluid">
-      <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="dashboard.php">
-        <img src="../img/logo.png" alt="Logo da Empresa" style="height:auto;max-width:130px;">
-      </a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#adminNavbar"><span class="navbar-toggler-icon"></span></button>
-      <div class="collapse navbar-collapse" id="adminNavbar">
-        <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-          <li class="nav-item"><a class="nav-link" href="dashboard.php"><i class="bi bi-house"></i> Início</a></li>
-          <li class="nav-item"><a class="nav-link" href="attendances.php"><i class="bi bi-calendar-check"></i> Registros de Ponto</a></li>
-          <li class="nav-item"><a class="nav-link active" href="teachers.php"><i class="bi bi-person-badge"></i> Colaboradores</a></li>
-          <li class="nav-item"><a class="nav-link" href="leaves.php"><i class="bi bi-person-x"></i> Afastamentos</a></li>
-          <?php if (is_network_admin($admin)): ?>
-            <li class="nav-item"><a class="nav-link" href="schools.php"><i class="bi bi-building"></i> Instituições</a></li>
-            <li class="nav-item"><a class="nav-link" href="admins.php"><i class="bi bi-people"></i> Administradores</a></li>
-          <?php endif; ?>
-          <li class="nav-item"><a class="nav-link" href="attendance_manual.php"><i class="bi bi-plus-circle"></i> Inserir Ponto Manual</a></li>
-        </ul>
-        <span class="navbar-text me-3 d-none d-lg-inline">
-          <i class="bi bi-person-circle"></i>
-          <?= esc($_SESSION['admin_name'] ?? 'Administrador') ?>
-        </span>
-        <a href="logout.php" class="btn btn-outline-light"><i class="bi bi-box-arrow-right"></i> Sair</a>
-      </div>
-    </div>
-  </nav>
+  <?php include __DIR__ . '/_navbar.php'; ?>
 
   <div class="container">
     <div class="card mb-3">
       <div class="card-body">
-        <form class="row g-3" method="get" autocomplete="off">
-          <div class="col-md-4">
+        <form class="admin-filters row g-3" method="get" autocomplete="off">
+          <div class="col-12 col-md-4">
             <label class="form-label">Mês</label>
             <input type="month" name="month" class="form-control" value="<?= esc($month) ?>">
           </div>
-          <div class="col-md-6">
+          <div class="col-12 col-md-6">
             <label class="form-label">Colaborador</label>
             <?php
-            // lista restrita ao escopo
             $listSt = $pdo->prepare("SELECT t.id, t.name FROM teachers t WHERE $scopeSql ORDER BY t.name");
             $listSt->execute($scopeParams);
             $opts = $listSt->fetchAll(PDO::FETCH_ASSOC);
@@ -233,7 +287,7 @@ function build_url_with(array $extra): string
               <?php endforeach; ?>
             </select>
           </div>
-          <div class="col-md-2 align-self-end d-flex gap-2 flex-wrap">
+          <div class="col-12 col-md-2 align-self-end d-flex gap-2 flex-wrap">
             <button class="btn btn-primary w-100">Gerar</button>
             <?php if ($selectedTeacher): ?>
               <a class="btn btn-outline-secondary w-100" href="<?= esc(build_url_with(['export' => 'pdf'])) ?>">Exportar PDF</a>
@@ -244,78 +298,159 @@ function build_url_with(array $extra): string
     </div>
 
     <?php if ($selectedTeacher): ?>
+      <?php /* $teacherStartDate já definido no topo (janela de contagem) */ ?>
       <div class="card">
         <div class="card-body">
           <h5 class="mb-3">Relatório Mensal - <?= esc($selectedTeacher['name']) ?> - <?= esc((new DateTime($month . '-01'))->format('m/Y')) ?></h5>
-          <div class="row g-3 mb-3">
-            <div class="col-md-4">
-              <div class="border rounded p-3 bg-light">
-                <div class="text-muted">Horas esperadas</div>
-                <div class="fs-4"><?= minutes_to_hhmm($totalExpectedMin) ?></div>
-              </div>
+          <div class="admin-kpi-row">
+            <div class="admin-kpi-card">
+              <div class="admin-kpi-label">Horas esperadas</div>
+              <div class="admin-kpi-value"><?= minutes_to_hhmm($totalExpectedMin) ?></div>
             </div>
-            <div class="col-md-4">
-              <div class="border rounded p-3 bg-light">
-                <div class="text-muted">Horas trabalhadas</div>
-                <div class="fs-4"><?= minutes_to_hhmm($totalWorkedMin) ?></div>
-              </div>
+            <div class="admin-kpi-card">
+              <div class="admin-kpi-label">Horas trabalhadas (líquido)</div>
+              <?php
+                // Exibição = LÍQUIDO (presença − intervalos). O Saldo ao lado segue o
+                // modelo "cheio vs cheio" (intervalo conta como trabalhado): por isso
+                // líquido + intervalo = presença, e Saldo = presença − previsto.
+                $totalNetWorkedMin = max(0, (int)$totalWorkedMin - (int)$totalBreakMin);
+              ?>
+              <div class="admin-kpi-value"><?= minutes_to_hhmm($totalNetWorkedMin) ?></div>
             </div>
-            <div class="col-md-4">
-              <div class="border rounded p-3 <?= $saldo < 0 ? 'bg-danger-subtle' : 'bg-success-subtle' ?>">
-                <div class="text-muted">Saldo</div>
-                <div class="fs-4"><?= minutes_to_hhmm($saldo) ?></div>
-              </div>
+            <?php if ($totalBreakMin > 0): ?>
+            <div class="admin-kpi-card">
+              <div class="admin-kpi-label">Intervalo</div>
+              <div class="admin-kpi-value"><?= minutes_to_hhmm((int)$totalBreakMin) ?></div>
+            </div>
+            <div class="admin-kpi-card">
+              <div class="admin-kpi-label">Presença</div>
+              <div class="admin-kpi-value"><?= minutes_to_hhmm((int)$totalEffectiveMin) ?></div>
+            </div>
+            <?php endif; ?>
+            <div class="admin-kpi-card <?= $saldo > 0 ? 'bg-success-subtle' : '' ?>">
+              <div class="admin-kpi-label"><?= $saldo < 0 ? 'Horas a compensar' : 'Saldo' ?></div>
+              <div class="admin-kpi-value"><?= $saldo < 0 ? minutes_to_hhmm(abs($saldo)) : minutes_to_hhmm($saldo) ?></div>
             </div>
           </div>
 
-          <div class="table-responsive">
-            <table class="table table-striped table-sm align-middle">
-              <thead>
+          <p class="text-muted small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            "Horas trabalhadas" é o líquido (sem intervalo). O <strong>saldo</strong> usa a <strong>presença</strong> (trabalhado + intervalo) comparada ao esperado — o intervalo é um direito do colaborador e <strong>não gera déficit</strong>.
+          </p>
+
+          <div class="admin-table-wrap table-responsive">
+            <table class="table table-striped table-sm align-middle table-sticky">
+              <thead class="table-light">
                 <tr>
-                  <th style="width:110px;">Data</th>
-                  <th style="width:110px;">Esperado</th>
-                  <th style="width:110px;">Trabalhado</th>
-                  <th>Pontos</th>
-                  <th style="width:240px;">Justificativa</th>
+                  <th scope="col" style="width:110px;">Data</th>
+                  <th scope="col" style="width:110px;">Esperado</th>
+                  <th scope="col" style="width:110px;">Trabalhado</th>
+                  <th scope="col">Pontos</th>
+                  <th scope="col" style="width:240px;">Justificativa</th>
                 </tr>
               </thead>
               <tbody>
                 <?php foreach ($daily as $date => $info): ?>
-                  <tr>
-                    <td><?= esc((new DateTime($date))->format('d/m/Y')) ?></td>
-                    <td><?= minutes_to_hhmm($info['expectedMin']) ?></td>
-                    <td><?= minutes_to_hhmm($info['workedMin']) ?></td>
+                  <tr <?= !empty($info['holiday']) ? 'class="table-danger"' : '' ?>>
                     <td>
-                      <?php if (!empty($info['items'])): ?>
-                        <?php foreach ($info['items'] as $it): ?>
+                      <?= esc((new DateTime($date))->format('d/m/Y')) ?>
+                      <?php if (!empty($info['holiday'])): ?>
+                        <div class="badge bg-danger mt-1"><?= esc($info['holiday']['name']) ?></div>
+                      <?php endif; ?>
+                    </td>
+                    <td><?= minutes_to_hhmm($info['expectedMin']) ?></td>
+                    <td><?= minutes_to_hhmm(max(0, (int)$info['workedMin'] - (int)($info['breakMin'] ?? 0))) ?></td>
+                    <td>
+                      <?php if (!empty($info['items'])):
+                        // Consolida: 1 par entrada→saída do dia + sub-lista de intervalos
+                        $itemsForConsolidation = array_map(function($it) use ($selectedTeacher) {
+                            $it['teacher_id'] = (int)$selectedTeacher['id'];
+                            $it['teacher_name'] = $selectedTeacher['name'];
+                            return $it;
+                        }, $info['items']);
+                        $dayCons = consolidate_attendance_by_day($itemsForConsolidation);
+                        $dayCon = $dayCons[0] ?? null;
+                        if ($dayCon):
+                            $dayIn  = $dayCon['check_in']  ? substr($dayCon['check_in'], 0, 5)  : '-';
+                            $dayOut = $dayCon['check_out'] ? substr($dayCon['check_out'], 0, 5) : '-';
+                            $primaryItem = null;
+                            foreach ($info['items'] as $it) {
+                                if (($it['record_type'] ?? 'work') === 'work') { $primaryItem = $it; break; }
+                            }
+                            if ($primaryItem === null) $primaryItem = $info['items'][0];
+                            $methodLabels = ['cpf' => 'CPF', 'pin' => 'CPF', 'foto' => 'Foto', 'face' => 'Reconhecimento Facial', 'manual' => 'Manual'];
+                            $methodLabel = $methodLabels[strtolower((string)($primaryItem['method'] ?? ''))] ?? ($primaryItem['method'] ?? '-');
+                            $editTxt = '';
+                            if (!empty($primaryItem['data_edicao'])) {
+                                $editTxt = ' | Editado por ' . esc($primaryItem['edited_by_username'] ?? ('#' . (int)($primaryItem['editado_por'] ?? 0))) .
+                                           ' em ' . esc(date('d/m/Y H:i', strtotime($primaryItem['data_edicao']))) .
+                                           ' - Motivo: ' . esc($primaryItem['motivo_edicao'] ?? '-');
+                            }
+                        ?>
                           <div class="mb-1">
-                            <?php
-                            $entrada = !empty($it['check_in']) ? (new DateTime($it['check_in']))->format('H:i:s') : '-';
-                            $saida = !empty($it['check_out']) ? (new DateTime($it['check_out']))->format('H:i:s') : '-';
-                            ?>
-                            <span class="badge bg-primary-subtle text-dark">Entrada: <?= esc($entrada) ?></span>
-                            <span class="badge bg-secondary-subtle text-dark">Saída: <?= esc($saida) ?></span>
-                            <span class="text-muted ms-2">Método: <?= esc($it['method'] ?? '-') ?></span>
-                            <?php if (!empty($it['photo'])): ?>
-                              <br>
-                              <img src="/photos/<?= esc($it['photo']) ?>" alt="Foto" style="max-width:90px;max-height:90px;border-radius:5px;border:1px solid #ccc;">
+                            <span class="badge bg-primary-subtle text-dark">Entrada: <?= esc($dayIn) ?></span>
+                            <span class="badge bg-secondary-subtle text-dark">Saída: <?= esc($dayOut) ?></span>
+                            <span class="text-muted ms-2">Método: <?= esc($methodLabel) ?></span>
+                            <?php if (!empty($dayCon['breaks'])): ?>
+                              <span class="badge bg-info-subtle text-info-emphasis border ms-2"><i class="bi bi-pause-circle me-1"></i><?= count($dayCon['breaks']) ?> int. (<?= esc(format_duration_minutes((int)$dayCon['total_break_minutes'])) ?>)</span>
+                            <?php endif; ?>
+                            <?php if ($editTxt): ?>
+                              <div class="small text-muted"><?= $editTxt ?></div>
                             <?php endif; ?>
                           </div>
-                        <?php endforeach; ?>
+                          <?php if (!empty($dayCon['breaks'])): ?>
+                            <ul class="list-unstyled mb-0 small text-muted" style="padding-left: 1.25rem;">
+                              <?php foreach ($dayCon['breaks'] as $bi => $bb):
+                                $bs = $bb['start'] ? substr($bb['start'], 0, 5) : '-';
+                                $be = $bb['end']   ? substr($bb['end'], 0, 5)   : '<em>aberto</em>';
+                                $bd = $bb['duration_minutes'] !== null ? format_duration_minutes((int)$bb['duration_minutes']) : '-';
+                              ?>
+                                <li>↳ Intervalo <?= ($bi + 1) ?>: <?= esc($bs) ?> → <?= $be ?> <span class="text-muted">(<?= esc($bd) ?>)</span></li>
+                              <?php endforeach; ?>
+                            </ul>
+                          <?php endif; ?>
+                        <?php endif; ?>
                       <?php else: ?>
-                        <span class="text-muted">Sem pontos</span>
+                        <?php 
+                        // Só marca FALTA se: tinha jornada, data já passou E após data de criação
+                        $isFalta = ($info['expectedMin'] > 0) && ($date <= date('Y-m-d')) && ($date >= $teacherStartDate);
+                        ?>
+                        <?php if ($isFalta): ?>
+                          <span class="badge bg-danger text-white fs-6">
+                            <i class="bi bi-exclamation-triangle-fill"></i> FALTA
+                          </span>
+                          <div class="small text-danger mt-1">Jornada prevista não registrada</div>
+                        <?php else: ?>
+                          <span class="text-muted">-</span>
+                        <?php endif; ?>
                       <?php endif; ?>
                     </td>
                     <td>
                       <?php
                       $just = [];
+                      // Afastamentos
+                      if (!empty($info['leaves'])) {
+                        foreach ($info['leaves'] as $leave) {
+                          $leaveText = '🏥 ' . $leave['type'];
+                          if (!empty($leave['cid_code'])) $leaveText .= ' (CID: ' . $leave['cid_code'] . ')';
+                          if ($leave['paid']) $leaveText .= ' - Remunerado';
+                          $just[] = $leaveText;
+                        }
+                      }
+                      // Justificativas manuais
                       foreach ($info['items'] as $it) {
                         if (!empty($it['manual_reason_id'])) {
                           $jr = trim(($it['manual_reason_name'] ?? 'Manual') . (!empty($it['manual_reason_text']) ? ' - ' . $it['manual_reason_text'] : ''));
                           if ($jr !== '') $just[] = $jr;
                         }
                       }
-                      echo $just ? esc(implode(' | ', $just)) : '<span class="text-muted">-</span>';
+                      if ($just) {
+                        foreach ($just as $j) {
+                          echo '<div class="small mb-1">' . esc($j) . '</div>';
+                        }
+                      } else {
+                        echo '<span class="text-muted">-</span>';
+                      }
                       ?>
                     </td>
                   </tr>
@@ -325,23 +460,80 @@ function build_url_with(array $extra): string
                 <tr class="fw-bold">
                   <td>Total</td>
                   <td><?= minutes_to_hhmm($totalExpectedMin) ?></td>
-                  <td><?= minutes_to_hhmm($totalWorkedMin) ?></td>
+                  <td><?= minutes_to_hhmm(max(0, (int)$totalWorkedMin - (int)$totalBreakMin)) ?></td>
                   <td colspan="2"></td>
                 </tr>
               </tfoot>
             </table>
           </div>
 
-          <div class="no-print mt-3 d-flex gap-2 flex-wrap">
-            <button class="btn btn-outline-secondary" onclick="window.print()">Salvar como PDF (navegador)</button>
-            <a class="btn btn-outline-secondary" href="<?= esc(build_url_with(['export' => 'pdf'])) ?>">Exportar PDF (servidor)</a>
-            <a class="btn btn-outline-secondary" href="reports_financial.php?teacher_id=<?= (int)$selectedTeacher['id'] ?>&month=<?= esc($month) ?>">Financeiro</a>
-            <a class="btn btn-secondary" href="teachers.php">Voltar</a>
+          <?php if (!empty($leaves)): ?>
+            <div class="card shadow-sm mt-4">
+              <div class="card-header bg-info text-white">
+                <h6 class="mb-0"><i class="bi bi-person-x me-2"></i>Afastamentos no Período</h6>
+              </div>
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="table table-sm table-bordered">
+                    <thead class="table-light">
+                      <tr>
+                        <th scope="col">Tipo</th>
+                        <th scope="col">Período</th>
+                        <th scope="col">Dias</th>
+                        <th scope="col">Remunerado</th>
+                        <th scope="col">Detalhes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <?php foreach ($leaves as $lv): ?>
+                        <?php
+                        $startFmt = (new DateTime($lv['start_date']))->format('d/m/Y');
+                        $endFmt = (new DateTime($lv['end_date']))->format('d/m/Y');
+                        $daysCount = $lv['days_count'] ?? ((new DateTime($lv['start_date']))->diff(new DateTime($lv['end_date']))->days + 1);
+                        ?>
+                        <tr>
+                          <td><?= esc($lv['leave_type_name']) ?></td>
+                          <td><?= esc($startFmt) ?> até <?= esc($endFmt) ?></td>
+                          <td class="text-center"><span class="badge bg-info"><?= $daysCount ?> dia<?= $daysCount != 1 ? 's' : '' ?></span></td>
+                          <td class="text-center"><?= (int)$lv['paid'] ? '<span class="badge bg-success">Sim</span>' : '<span class="badge bg-secondary">Não</span>' ?></td>
+                          <td>
+                            <?php if (!empty($lv['cid_code'])): ?>
+                              <div class="small">CID: <?= esc($lv['cid_code']) ?></div>
+                            <?php endif; ?>
+                            <?php if (!empty($lv['description'])): ?>
+                              <div class="small text-muted"><?= esc(mb_strimwidth($lv['description'], 0, 100, '...')) ?></div>
+                            <?php endif; ?>
+                            <?php if (!empty($lv['attachment'])): ?>
+                              <a href="view_leave_attachment.php?id=<?= (int)$lv['id'] ?>" class="btn btn-sm btn-outline-primary mt-1" target="_blank">
+                                <i class="bi bi-file-earmark-text me-1"></i>Ver Atestado
+                              </a>
+                            <?php endif; ?>
+                          </td>
+                        </tr>
+                      <?php endforeach; ?>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="alert alert-info mb-0 mt-2">
+                  <i class="bi bi-info-circle me-2"></i>
+                  <strong>Importante:</strong> Afastamentos remunerados não afetam o cálculo de horas esperadas. 
+                  Os dias com afastamento remunerado têm expectativa zerada automaticamente.
+                </div>
+              </div>
+            </div>
+          <?php endif; ?>
+
+          <div class="admin-report-actions no-print">
+            <button class="btn btn-outline-secondary" onclick="window.print()" title="Imprimir ou salvar como PDF pelo navegador"><i class="bi bi-printer me-1"></i>Imprimir</button>
+            <a class="btn btn-outline-secondary" href="<?= esc(build_url_with(['export' => 'pdf'])) ?>" title="Exportar PDF gerado no servidor"><i class="bi bi-filetype-pdf me-1"></i>Exportar PDF</a>
+            <a class="btn btn-outline-secondary" href="reports_financial.php?teacher_id=<?= (int)$selectedTeacher['id'] ?>&month=<?= esc($month) ?>"><i class="bi bi-currency-dollar me-1"></i>Financeiro</a>
+            <a class="btn btn-secondary" href="teachers.php"><i class="bi bi-arrow-left me-1"></i>Voltar</a>
           </div>
         </div>
       </div>
     <?php endif; ?>
   </div>
+    <?php include __DIR__ . '/../_footer.php'; ?>
 </body>
 
 </html>

@@ -15,15 +15,22 @@ $totalWorked = isset($totalWorked) ? (int)$totalWorked
   : (int)array_sum(array_map(static fn($r) => (int)($r['worked'] ?? 0), $rows));
 
 $deltaMin = isset($deltaMin) ? (int)$deltaMin : ($totalWorked - $totalExpected);
-$minuteValue = isset($minuteValue) ? (float)$minuteValue : ($totalExpected > 0 ? $baseSalary / $totalExpected : 0.0);
 
-$extrasMin   = isset($extrasMin)   ? (int)$extrasMin   : max(0, $deltaMin);
-$deficitMin  = isset($deficitMin)  ? (int)$deficitMin  : max(0, -$deltaMin);
-$extraPay    = isset($extraPay)    ? (float)$extraPay  : ($extrasMin * $minuteValue * 0.5);
-$discountPay = isset($discountPay) ? (float)$discountPay : ($deficitMin * $minuteValue);
-$netSalary   = $baseSalary + $extraPay - $discountPay;
+// A instituição não paga hora extra nem desconta déficit automaticamente.
+// Total a receber = salário base; o saldo de horas é apenas informativo.
+$netSalary = $baseSalary;
 
-$deltaBg = $deltaMin >= 0 ? '#e8f5e9' : '#ffebee'; // verde claro / vermelho claro
+$deltaBg = '#eef2f7'; // neutro (sem destacar saldo negativo)
+
+// Conta faltas (dias com jornada prevista, sem registro, já passados, após data de criação)
+$totalAbsences = 0;
+$today = date('Y-m-d');
+$teacherStartDate = counting_start_for($teacher['created_at'] ?? null);
+foreach ($rows as $d => $v) {
+    if ((($v['expected'] ?? 0) > 0) && (($v['worked'] ?? 0) == 0) && ($d <= $today) && ($d >= $teacherStartDate) && empty($v['holiday'])) {
+        $totalAbsences++;
+    }
+}
 
 // Helper de hora segura
 $fmtTime = static function ($val) {
@@ -135,16 +142,28 @@ $fmtTime = static function ($val) {
         <th class="num">Trabalhado (min)</th>
         <th class="num">Entrada</th>
         <th class="num">Saída</th>
+        <th>Status</th>
       </tr>
     </thead>
     <tbody>
       <?php foreach ($rows as $d => $v): ?>
+        <?php
+        // Só marca FALTA se: tinha jornada, não trabalhou, data já passou E após data de criação
+        $isFalta = (($v['expected'] ?? 0) > 0) && (($v['worked'] ?? 0) == 0) && ($d <= date('Y-m-d')) && ($d >= $teacherStartDate) && empty($v['holiday']);
+        ?>
         <tr>
           <td><?= esc($d) ?></td>
           <td class="num"><?= (int)($v['expected'] ?? 0) ?></td>
           <td class="num"><?= (int)($v['worked'] ?? 0) ?></td>
           <td class="num"><?= isset($v['in']) ? esc($fmtTime($v['in'])) : '-' ?></td>
           <td class="num"><?= isset($v['out']) ? esc($fmtTime($v['out'])) : '-' ?></td>
+          <td>
+            <?php if ($isFalta): ?>
+              <strong style="color: #dc3545;">⚠ FALTA</strong>
+            <?php else: ?>
+              <span class="muted">-</span>
+            <?php endif; ?>
+          </td>
         </tr>
       <?php endforeach; ?>
     </tbody>
@@ -161,13 +180,15 @@ $fmtTime = static function ($val) {
       <td class="num"><?= (int)$totalWorked ?> (<?= minutes_to_hhmm((int)$totalWorked) ?>)</td>
     </tr>
     <tr>
-      <th class="muted">Extras / Adicional</th>
-      <td class="num"><?= (int)$extrasMin ?> min / R$ <?= number_format($extraPay, 2, ',', '.') ?></td>
+      <th class="muted"><?= $deltaMin < 0 ? 'Horas a compensar' : 'Saldo de horas' ?></th>
+      <td class="num"><?= $deltaMin < 0 ? minutes_to_hhmm(abs($deltaMin)) : (($deltaMin > 0 ? '+' : '') . minutes_to_hhmm($deltaMin)) ?></td>
     </tr>
+    <?php if ($totalAbsences > 0): ?>
     <tr>
-      <th class="muted">Déficit / Descontos</th>
-      <td class="num"><?= (int)$deficitMin ?> min / R$ <?= number_format($discountPay, 2, ',', '.') ?></td>
+      <th class="muted">Faltas Detectadas</th>
+      <td class="num"><strong style="color: #dc3545;"><?= (int)$totalAbsences ?> dia(s)</strong></td>
     </tr>
+    <?php endif; ?>
     <tr>
       <th class="muted">Salário Base</th>
       <td class="num">R$ <?= number_format($baseSalary, 2, ',', '.') ?></td>
@@ -178,7 +199,26 @@ $fmtTime = static function ($val) {
     </tr>
   </table>
 
-  <div class="footer">Gerado em <?= date('d/m/Y H:i') ?></div>
+  <?php
+    // Logo em base64 para Dompdf
+    $logoPath = __DIR__ . '/../../public/img/logo_prefeitura.png';
+    $logoBase64 = '';
+    if (file_exists($logoPath)) {
+      $logoBase64 = 'data:image/png;base64,' . base64_encode(file_get_contents($logoPath));
+    }
+  ?>
+  <div style="margin-top: 24px; text-align: center; border-top: 1px solid #ddd; padding-top: 16px;">
+    <?php if ($logoBase64): ?>
+    <div style="margin-bottom: 10px;">
+      <img src="<?= $logoBase64 ?>" alt="Prefeitura" style="height: 90px; width: auto;">
+    </div>
+    <?php endif; ?>
+    <div style="font-size: 10px; color: #666;">
+      <div>Prefeitura Municipal de Oeiras - PI</div>
+      <div>DEEDO Sistemas - Sistema de Ponto Eletrônico</div>
+      <div style="margin-top: 4px;">Gerado em <?= date('d/m/Y H:i') ?></div>
+    </div>
+  </div>
 </body>
 
 </html>

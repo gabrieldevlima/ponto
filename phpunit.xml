@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Configuração do PHPUnit — Fase 9.6 de docs/AUDITORIA_CONFORMIDADE_2026-08-05.md.
+
+  A suíte deste projeto nasceu como 33 scripts procedurais que imprimem
+  "[OK] / [FAIL]" e encerram com código de saída. Reescrevê-los como classes
+  PHPUnit seria um trabalho grande e de valor discutível: os testes JÁ existem,
+  JÁ verificam o que precisam e JÁ falham quando devem.
+
+  O que faltava era integração com CI. `tests/SuiteTest.php` executa cada script
+  como subprocesso e transforma o resultado numa asserção PHPUnit — com isso o
+  CI ganha relatório padronizado sem reescrever nada, e novos testes podem
+  nascer como classes PHPUnit normais, convivendo com os antigos.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         failOnWarning="true"
+         failOnRisky="true"
+         cacheDirectory=".phpunit.cache">
+    <testsuites>
+        <testsuite name="ponto">
+            <directory suffix="Test.php">tests</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>lib</directory>
+            <file>helpers.php</file>
+        </include>
+    </source>
+</phpunit>
