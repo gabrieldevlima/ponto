@@ -793,7 +793,7 @@ try {
                 </select>
                 <span class="small text-muted">por página</span>
               </div>
-              <div id="forgottenInfo" class="small text-muted"></div>
+              <div id="forgottenInfo" class="small text-muted" aria-live="polite"></div>
             </div>
             <div class="table-responsive">
               <table id="forgottenTable" class="table table-hover align-middle">
@@ -891,7 +891,7 @@ try {
                 </select>
                 <span class="small text-muted">por página</span>
               </div>
-              <div id="absentInfo" class="small text-muted"></div>
+              <div id="absentInfo" class="small text-muted" aria-live="polite"></div>
             </div>
             <div class="table-responsive">
               <table id="absentTable" class="table table-hover align-middle">
@@ -1311,54 +1311,78 @@ try {
         this.renderPagination();
       }
       
-      renderPagination() {
-        this.paginationContainer.innerHTML = '';
-        
-        if (this.totalPages <= 1) return;
-        
-        // Botão Anterior
-        const prevLi = document.createElement('li');
-        prevLi.className = `page-item ${this.currentPage === 1 ? 'disabled' : ''}`;
-        prevLi.innerHTML = `<a class="page-link" href="#" aria-label="Anterior"><i class="bi bi-chevron-left"></i></a>`;
-        if (this.currentPage > 1) {
-          prevLi.querySelector('a').addEventListener('click', (e) => {
+      // Um controle da paginação. Desabilitado vira link SEM href e com
+      // aria-disabled, como em _pagination.php: não recebe foco nem é ativado.
+      // Antes era <a href="#"> sem ouvinte — focável pelo Tab, e o Enter seguia
+      // o "#", levando ao topo da página. `chave` identifica o controle para o
+      // foco voltar a ele depois de a paginação ser redesenhada.
+      criarControle(conteudo, { chave, destino, rotulo = null, desabilitado = false, atual = false }) {
+        const li = document.createElement('li');
+        li.className = 'page-item' + (desabilitado ? ' disabled' : '') + (atual ? ' active' : '');
+        const a = document.createElement('a');
+        a.className = 'page-link';
+        a.innerHTML = conteudo;
+        a.dataset.chave = chave;
+        if (rotulo) a.setAttribute('aria-label', rotulo);
+        if (desabilitado) {
+          a.setAttribute('role', 'link');
+          a.setAttribute('aria-disabled', 'true');
+        } else {
+          a.href = '#';
+          if (atual) a.setAttribute('aria-current', 'page');
+          a.addEventListener('click', (e) => {
             e.preventDefault();
-            this.showPage(this.currentPage - 1);
+            this.showPage(destino);
           });
         }
-        this.paginationContainer.appendChild(prevLi);
-        
+        li.appendChild(a);
+        return li;
+      }
+
+      renderPagination() {
+        // Redesenhar destrói o botão que estava focado, e quem navega por
+        // teclado voltava para o início do documento. Guarda qual era para
+        // devolver o foco — só se o foco veio do teclado (:focus-visible), para
+        // não acender o anel de foco em quem clicou com o mouse.
+        const focado = document.activeElement;
+        const chaveFocada = this.paginationContainer.contains(focado) && focado.matches(':focus-visible')
+          ? focado.dataset.chave : null;
+
+        this.paginationContainer.innerHTML = '';
+
+        if (this.totalPages <= 1) return;
+
+        this.paginationContainer.appendChild(this.criarControle('<i class="bi bi-chevron-left" aria-hidden="true"></i>', {
+          chave: 'prev', destino: this.currentPage - 1, rotulo: 'Anterior',
+          desabilitado: this.currentPage === 1,
+        }));
+
         // Números de página (com ellipsis inteligente)
-        const pages = this.getPageNumbers();
-        pages.forEach(page => {
-          const li = document.createElement('li');
-          
+        this.getPageNumbers().forEach(page => {
           if (page === '...') {
+            const li = document.createElement('li');
             li.className = 'page-item disabled';
             li.innerHTML = '<span class="page-link">...</span>';
+            this.paginationContainer.appendChild(li);
           } else {
-            li.className = `page-item ${this.currentPage === page ? 'active' : ''}`;
-            li.innerHTML = `<a class="page-link" href="#">${page}</a>`;
-            li.querySelector('a').addEventListener('click', (e) => {
-              e.preventDefault();
-              this.showPage(page);
-            });
+            this.paginationContainer.appendChild(this.criarControle(String(page), {
+              chave: 'p' + page, destino: page, atual: this.currentPage === page,
+            }));
           }
-          
-          this.paginationContainer.appendChild(li);
         });
-        
-        // Botão Próximo
-        const nextLi = document.createElement('li');
-        nextLi.className = `page-item ${this.currentPage === this.totalPages ? 'disabled' : ''}`;
-        nextLi.innerHTML = `<a class="page-link" href="#" aria-label="Próximo"><i class="bi bi-chevron-right"></i></a>`;
-        if (this.currentPage < this.totalPages) {
-          nextLi.querySelector('a').addEventListener('click', (e) => {
-            e.preventDefault();
-            this.showPage(this.currentPage + 1);
-          });
+
+        this.paginationContainer.appendChild(this.criarControle('<i class="bi bi-chevron-right" aria-hidden="true"></i>', {
+          chave: 'next', destino: this.currentPage + 1, rotulo: 'Próximo',
+          desabilitado: this.currentPage === this.totalPages,
+        }));
+
+        if (chaveFocada) {
+          // Se o controle ficou desabilitado (ex.: "Próximo" até a última
+          // página), o foco vai para a página atual.
+          const alvo = this.paginationContainer.querySelector(`[data-chave="${chaveFocada}"][href]`)
+            || this.paginationContainer.querySelector('[aria-current="page"]');
+          if (alvo) alvo.focus({ preventScroll: true });
         }
-        this.paginationContainer.appendChild(nextLi);
       }
       
       getPageNumbers() {
