@@ -2,6 +2,97 @@
 declare(strict_types=1);
 
 /**
+ * Parte um bloco SQL em statements pelo `;` — mas só o `;` que está FORA de
+ * string, identificador ou comentário.
+ *
+ * Substitui o `explode(';', ...)` do fallback do runner de migrações, que não
+ * conhecia aspas. Duas migrações têm `;` dentro de um COMMENT
+ * (`'validade do token; NULL apos ...'`): quando o bloco multi-statement falhava
+ * por qualquer motivo, o explode cortava a string ao meio, o banco acusava erro
+ * de SINTAXE e a causa real da falha original sumia do log. Descoberto ao
+ * passar o CI para MariaDB em 23/09/2026.
+ *
+ * Reconhece: '...' e "..." (com escape por aspa dobrada ou barra), `...` (com
+ * crase dobrada), comentários /* ... *\/, `# ...` e `-- ...` até o fim da linha.
+ * Comentários são preservados no statement — quem remove é o chamador, se quiser.
+ *
+ * @return string[] statements aparados, sem os vazios
+ */
+function split_sql_statements(string $sql): array {
+    $out = [];
+    $buf = '';
+    $len = strlen($sql);
+    $i = 0;
+    while ($i < $len) {
+        $c = $sql[$i];
+        $n = $i + 1 < $len ? $sql[$i + 1] : '';
+
+        // Strings e identificadores: copia até a aspa de fechamento.
+        if ($c === "'" || $c === '"' || $c === '`') {
+            $q = $c;
+            $buf .= $c;
+            $i++;
+            while ($i < $len) {
+                $d = $sql[$i];
+                // Barra escapa o próximo caractere em '...' e "...", nunca em `...`.
+                if ($d === '\\' && $q !== '`' && $i + 1 < $len) {
+                    $buf .= $d . $sql[$i + 1];
+                    $i += 2;
+                    continue;
+                }
+                if ($d === $q) {
+                    // Aspa dobrada é escape, não fechamento.
+                    if ($i + 1 < $len && $sql[$i + 1] === $q) {
+                        $buf .= $d . $d;
+                        $i += 2;
+                        continue;
+                    }
+                    $buf .= $d;
+                    $i++;
+                    break;
+                }
+                $buf .= $d;
+                $i++;
+            }
+            continue;
+        }
+
+        // Comentário de bloco.
+        if ($c === '/' && $n === '*') {
+            $fim = strpos($sql, '*/', $i + 2);
+            $fim = $fim === false ? $len : $fim + 2;
+            $buf .= substr($sql, $i, $fim - $i);
+            $i = $fim;
+            continue;
+        }
+
+        // Comentário de linha: `#`, ou `--` seguido de espaço/fim de linha
+        // (em MySQL/MariaDB `--1` é aritmética, não comentário).
+        if ($c === '#' || ($c === '-' && $n === '-' && ($i + 2 >= $len || ctype_space($sql[$i + 2])))) {
+            $fim = strpos($sql, "\n", $i);
+            $fim = $fim === false ? $len : $fim;
+            $buf .= substr($sql, $i, $fim - $i);
+            $i = $fim;
+            continue;
+        }
+
+        if ($c === ';') {
+            $s = trim($buf);
+            if ($s !== '') $out[] = $s;
+            $buf = '';
+            $i++;
+            continue;
+        }
+
+        $buf .= $c;
+        $i++;
+    }
+    $s = trim($buf);
+    if ($s !== '') $out[] = $s;
+    return $out;
+}
+
+/**
  * Sistema de auto-migração — executa arquivos SQL de sql/migrations/ que
  * ainda não foram aplicados, com garantias para produção:
  *
@@ -193,8 +284,10 @@ function run_auto_migrations(): void {
                 }
                 $stmtCount = 1; // contagem aproximada
             } catch (PDOException $e) {
-                // Fallback: statement por statement (split simples por ;).
-                $statements = array_filter(array_map('trim', explode(';', $cleanSql)));
+                // Fallback: statement por statement. O split respeita aspas — o
+                // explode(';') anterior cortava COMMENT com ';' dentro e trocava a
+                // causa real da falha por um erro de sintaxe (ver split_sql_statements).
+                $statements = split_sql_statements($cleanSql);
                 $stmtCount = count($statements);
                 $hadFatal = false;
                 foreach ($statements as $statement) {
