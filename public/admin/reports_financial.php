@@ -756,16 +756,16 @@ $pageTitle = 'Relatório Financeiro';
                     </datalist>
                 </div>
                 <div class="col-6 col-md-3 col-lg-2">
-                    <label class="form-label small fw-semibold">Mês</label>
-                    <input type="month" name="month" class="form-control" value="<?= esc($month) ?>" data-auto-submit>
+                    <label class="form-label small fw-semibold" for="flt-month">Mês</label>
+                    <input type="month" name="month" id="flt-month" class="form-control" value="<?= esc($month) ?>" data-auto-submit>
                 </div>
                 <div class="col-6 col-md-3 col-lg-2">
                     <label class="form-label small fw-semibold">— OU —</label>
-                    <input type="date" name="date_from" class="form-control" value="<?= esc($dateFrom) ?>" placeholder="De">
+                    <input type="date" name="date_from" id="flt-date-from" class="form-control" value="<?= esc($dateFrom) ?>" placeholder="De" aria-label="Data inicial">
                 </div>
                 <div class="col-6 col-md-3 col-lg-2">
-                    <label class="form-label small fw-semibold">Até</label>
-                    <input type="date" name="date_to" class="form-control" value="<?= esc($dateTo) ?>">
+                    <label class="form-label small fw-semibold" for="flt-date-to">Até</label>
+                    <input type="date" name="date_to" id="flt-date-to" class="form-control" value="<?= esc($dateTo) ?>">
                 </div>
                 <?php if (is_network_admin($adm)): ?>
                 <div class="col-12 col-md-6 col-lg-2">

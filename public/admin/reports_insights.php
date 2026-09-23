@@ -674,12 +674,12 @@ $pageTitle = 'Análises e Rankings';
                     </div>
                 </div>
                 <div class="col-6 col-md-3 col-lg-2">
-                    <label class="form-label small fw-semibold">Data inicial</label>
-                    <input type="date" name="date_from" class="form-control" value="<?= esc($dateFrom) ?>">
+                    <label class="form-label small fw-semibold" for="flt-date-from">Data inicial</label>
+                    <input type="date" name="date_from" id="flt-date-from" class="form-control" value="<?= esc($dateFrom) ?>">
                 </div>
                 <div class="col-6 col-md-3 col-lg-2">
-                    <label class="form-label small fw-semibold">Data final</label>
-                    <input type="date" name="date_to" class="form-control" value="<?= esc($dateTo) ?>">
+                    <label class="form-label small fw-semibold" for="flt-date-to">Data final</label>
+                    <input type="date" name="date_to" id="flt-date-to" class="form-control" value="<?= esc($dateTo) ?>">
                 </div>
                 <?php if (is_network_admin($admin)): ?>
                 <div class="col-12 col-md-6 col-lg-2">
@@ -703,8 +703,8 @@ $pageTitle = 'Análises e Rankings';
                     </select>
                 </div>
                 <div class="col-6 col-md-3 col-lg-1">
-                    <label class="form-label small fw-semibold" title="Tolerância em minutos para considerar entrada pontual">Tol. (min)</label>
-                    <input type="number" min="0" max="60" name="tol_min" class="form-control" value="<?= (int)$tolMin ?>">
+                    <label class="form-label small fw-semibold" title="Tolerância em minutos para considerar entrada pontual" for="flt-tol-min">Tol. (min)</label>
+                    <input type="number" min="0" max="60" name="tol_min" id="flt-tol-min" class="form-control" value="<?= (int)$tolMin ?>">
                 </div>
                 <div class="col-12 col-lg-1">
                     <button class="btn btn-primary w-100" type="submit">

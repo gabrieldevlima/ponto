@@ -182,12 +182,12 @@ $admins = $pdo->query("SELECT id, username FROM admins ORDER BY username")->fetc
                             </select>
                         </div>
                         <div class="col-md-2">
-                            <label class="form-label small fw-semibold mb-1">Data Inicial</label>
-                            <input type="date" name="date_from" class="form-control form-control-sm" value="<?= esc($filterDateFrom) ?>">
+                            <label class="form-label small fw-semibold mb-1" for="flt-date-from">Data Inicial</label>
+                            <input type="date" name="date_from" id="flt-date-from" class="form-control form-control-sm" value="<?= esc($filterDateFrom) ?>">
                         </div>
                         <div class="col-md-2">
-                            <label class="form-label small fw-semibold mb-1">Data Final</label>
-                            <input type="date" name="date_to" class="form-control form-control-sm" value="<?= esc($filterDateTo) ?>">
+                            <label class="form-label small fw-semibold mb-1" for="flt-date-to">Data Final</label>
+                            <input type="date" name="date_to" id="flt-date-to" class="form-control form-control-sm" value="<?= esc($filterDateTo) ?>">
                         </div>
                         <div class="col-md-2">
                             <label class="form-label small fw-semibold mb-1">ID do Registro</label>

@@ -27,7 +27,7 @@ $__fVer = 'v2.12.0';
     <span>Portaria MTP 671/2021</span>
   </div>
   <div class="app-footer-copy">
-    &copy; <?= $__fYear ?> DEEDO Sistemas <span class="app-footer-sep">·</span> <?= $__fVer ?>
+    &copy; <?= $__fYear ?> DEEDO Sistemas <span class="app-footer-sep" aria-hidden="true">·</span> <?= $__fVer ?>
   </div>
 </footer>
 
@@ -67,21 +67,24 @@ $__fVer = 'v2.12.0';
     padding: 5px 12px;
     border-radius: 999px;
     background: var(--r-brand-soft, #e7f1ff);
-    color: var(--r-brand, #0d6efd);
+    /* Azul mais fechado que o da marca: #0d6efd sobre #e7f1ff dava 3,94:1,
+       abaixo do mínimo WCAG AA (4,5:1) para texto de 11px. Mesmo tom já usado
+       no alerta informativo do login, sobre o mesmo fundo — 6,5:1. */
+    color: #0a4fbb;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: .02em;
     margin-bottom: 12px;
   }
   .app-footer-badge i { font-size: 13px; opacity: .9; }
+  /* Sem opacity: o cinza a 85% sobre o fundo claro das telas dava 3,46:1,
+     abaixo do mínimo WCAG AA (4,5:1). Com o tom de texto secundário, ~7:1. */
   .app-footer-copy {
     font-size: 11px;
-    color: var(--r-ink-3, #6b7280);
-    opacity: .85;
+    color: var(--r-ink-2, #475569);
     font-weight: 500;
   }
   .app-footer-sep {
-    color: var(--r-edge, #e5e7eb);
     margin: 0 3px;
   }
 </style>

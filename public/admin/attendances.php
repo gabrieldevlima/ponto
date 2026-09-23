@@ -621,12 +621,12 @@ function build_url_with(array $extra): string
         </select>
       </div>
       <div class="col">
-        <label class="form-label">Data Inicial</label>
-        <input type="date" name="date1" class="form-control" value="<?= esc($_GET['date1'] ?? '') ?>">
+        <label class="form-label" for="flt-date1">Data Inicial</label>
+        <input type="date" name="date1" id="flt-date1" class="form-control" value="<?= esc($_GET['date1'] ?? '') ?>">
       </div>
       <div class="col">
-        <label class="form-label">Data Final</label>
-        <input type="date" name="date2" class="form-control" value="<?= esc($_GET['date2'] ?? '') ?>">
+        <label class="form-label" for="flt-date2">Data Final</label>
+        <input type="date" name="date2" id="flt-date2" class="form-control" value="<?= esc($_GET['date2'] ?? '') ?>">
       </div>
       <div class="col">
         <label class="form-label">Status</label>
