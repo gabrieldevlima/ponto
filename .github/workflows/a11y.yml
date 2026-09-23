@@ -89,9 +89,12 @@ jobs:
           mysql -h 127.0.0.1 -uroot -proot ponto < sql/seeds/ci_install.sql
           # Seed mínimo (1 admin + 1 escola + 1 colab) para autenticar páginas internas
           mysql -h 127.0.0.1 -uroot -proot ponto < sql/seeds/lhci_seed.sql
+      # Vários workers: o servidor embutido atende uma requisição por vez por
+      # padrão, e o Chrome pede CSS, JS e imagens em paralelo enquanto o
+      # script de login do Lighthouse abre outra aba.
       - name: Start PHP built-in server
         run: |
-          php -S 127.0.0.1:8080 -t public &
+          PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8080 -t public &
           sleep 2
 
       - name: Install Lighthouse CI

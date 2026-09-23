@@ -40,10 +40,13 @@ INSERT INTO schools (id, name, code, active) VALUES
     (9999, 'Escola CI Lighthouse', 'LHCI-TEST', 1)
 ON DUPLICATE KEY UPDATE name = VALUES(name);
 
--- Admin de rede para o lhci (CPF e username = '00000000000')
+-- Admin de rede para o lhci (CPF e username = '71428793860').
+-- CPF próprio de propósito: o install.sql (e o seed de referência do CI)
+-- cria o admin 'admin' com '00000000000'. Com os dois no mesmo CPF, o login
+-- — que busca por `WHERE cpf = ?` — pegava o outro e recusava a senha.
 -- Hash bcrypt válido para "lhci-test-2025" (cost=10)
 INSERT INTO admins (username, name, cpf, password_hash, role, school_id) VALUES
-    ('00000000000', 'CI Lighthouse', '00000000000',
+    ('71428793860', 'CI Lighthouse', '71428793860',
      '$2y$10$O4QcJDxr9pJ2KcMMoSbEiun53z5v9ZCj0XJ6kPWWBp3DZAhEvlvAq',
      'network_admin', NULL)
 ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = VALUES(role);
