@@ -119,7 +119,15 @@ try {
     })());
 
     echo "[7] Fingerprint da chave registrado (nunca a chave)\n";
-    $k = $pdo->query("SELECT * FROM ledger_keys WHERE kind = 'ed25519' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    // Registra a chave em uso e confere O QUE foi gravado. Antes a seção só lia
+    // a tabela e dependia de algum selo já ter sido emitido — no CI, que parte
+    // do schema de produção sem selo nenhum, ela falhava sem testar nada. E
+    // busca pela key_id em uso: num banco com chaves antigas, "qualquer
+    // ed25519" podia conferir a chave errada.
+    ledger_seal_register_key($pdo);
+    $stK = $pdo->prepare("SELECT * FROM ledger_keys WHERE kind = 'ed25519' AND key_id = ? LIMIT 1");
+    $stK->execute([ledger_seal_key_id()]);
+    $k = $stK->fetch(PDO::FETCH_ASSOC);
     if ($k) {
         check('fingerprint corresponde à chave pública', $k['fingerprint'] === hash('sha256', $pk));
         check('coluna public_key guarda a PÚBLICA', $k['public_key'] === base64_encode($pk));

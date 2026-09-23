@@ -108,7 +108,41 @@ check('listagem sinaliza o que está pendente', str_contains($lt, 'pendente'));
 
 echo "[6] Importação em massa — análise não grava nada\n";
 $antes = $pdo->query("SELECT COUNT(*) FROM teachers WHERE pis IS NOT NULL AND pis <> ''")->fetchColumn();
-$umCpf = $pdo->query("SELECT cpf FROM teachers WHERE active = 1 ORDER BY id LIMIT 1")->fetchColumn();
+// $umCpf precisa ser de um colaborador ATIVO que o importador consiga casar.
+// Pegava o primeiro colaborador do banco — no CI, que parte do schema de
+// produção sem dado nenhum, não havia colaborador, o CPF saía vazio e 27
+// verificações caíam em cascata com "CPF em branco". Usa um fictício: se já
+// houver alguém com este CPF, só o reaproveita (a análise não grava nada);
+// se não houver, cria e remove ao final.
+$umCpf = '52998224725';
+$stUm = $pdo->prepare("SELECT id FROM teachers WHERE cpf = ? LIMIT 1");
+$stUm->execute([$umCpf]);
+$idUm = (int)$stUm->fetchColumn();
+if (!$idUm) {
+    // Fixture própria para as seções que geram AFD/AEJ de junho/2026 — antes
+    // elas dependiam de a base ter colaboradores, jornadas e afastamentos reais
+    // naquele mês, e só passavam na máquina de desenvolvimento:
+    //   - nasce em janeiro, para caber na janela de contagem de junho;
+    //   - tem jornada na segunda-feira, sem a qual o AEJ não emite o tipo 2;
+    //   - tem um afastamento aprovado em junho, de tipo com código AEJ — é o
+    //     que faz sair o registro tipo 4 conferido na seção [19].
+    $pdo->prepare("INSERT INTO teachers (name, cpf, active, created_at) VALUES (?,?,1,?)")
+        ->execute(['ZZ Teste Cadastro AFD', $umCpf, '2026-01-01 00:00:00']);
+    $idUm = (int)$pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO collaborator_time_schedules (teacher_id, weekday, start_time, end_time, break_minutes)
+                   VALUES (?,1,'08:00:00','17:00:00',60)")->execute([$idUm]);
+    $tipoComCodigo = (int)$pdo->query("SELECT id FROM leave_types WHERE active = 1 AND aej_code IS NOT NULL AND aej_code <> '' ORDER BY id LIMIT 1")->fetchColumn();
+    if ($tipoComCodigo) {
+        $pdo->prepare("INSERT INTO leaves (teacher_id, type_id, start_date, end_date, days_count, approved) VALUES (?,?,?,?,?,1)")
+            ->execute([$idUm, $tipoComCodigo, '2026-06-10', '2026-06-12', 3]);
+    }
+    // Uma limpeza só, na ordem das dependências.
+    register_shutdown_function(function () use ($pdo, $idUm): void {
+        $pdo->prepare("DELETE FROM leaves WHERE teacher_id = ?")->execute([$idUm]);
+        $pdo->prepare("DELETE FROM collaborator_time_schedules WHERE teacher_id = ?")->execute([$idUm]);
+        $pdo->prepare("DELETE FROM teachers WHERE id = ?")->execute([$idUm]);
+    });
+}
 $csv = "cpf;pis;matricula\n{$umCpf};12001234564;M-9999\n";
 $r = importar_analisar($pdo, $csv);
 check('análise devolve itens', isset($r['itens']) && count($r['itens']) === 1, json_encode($r));
@@ -251,7 +285,10 @@ if ($afdCab !== null) {
           strlen($afdCab) . ' vs ' . afd_largura(1));
     check('tipo de registro é 1',        $c['tipo_registro'] === '1');
     check('NSR do cabeçalho é zerado',   $c['nsr'] === str_repeat('0', 9), $c['nsr']);
-    check('CNPJ sai só com dígitos',     $c['ident_empregador'] === '62000259000190', $c['ident_empregador']);
+    // Compara com o empregador CADASTRADO, não com o CNPJ da SEMED cravado no
+    // teste: o teste só passava no banco que tinha a SEMED configurada.
+    $empCad = $pdo->query("SELECT cnpj, company_name FROM employer_config LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: [];
+    check('CNPJ sai só com dígitos',     $c['ident_empregador'] === afd_pad_num($empCad['cnpj'] ?? '', 14), $c['ident_empregador']);
     check('tipo de identificação é 1 (pessoa jurídica)', $c['tipo_ident_empr'] === '1');
     check('identificador do REP está preenchido',
           trim($c['ident_rep']) !== '' && trim($c['ident_rep']) !== '0', "'{$c['ident_rep']}'");
@@ -260,7 +297,9 @@ if ($afdCab !== null) {
           "'{$c['ident_rep']}'");
     check('campo alfanumérico é preenchido à direita com espaço',
           $c['ident_rep'] === str_pad(trim($c['ident_rep']), 17), "'{$c['ident_rep']}'");
-    check('razão social presente', str_contains($c['razao_social'], 'SEMED'));
+    check('razão social é a cadastrada, normalizada pelo AFD',
+          trim($c['razao_social']) !== '' && $c['razao_social'] === afd_pad_alpha($empCad['company_name'] ?? '', strlen($c['razao_social'])),
+          "'" . trim($c['razao_social']) . "'");
     check('período confere com o solicitado',
           $c['data_inicial'] === '01062026' && $c['data_final'] === '30062026',
           $c['data_inicial'] . '/' . $c['data_final']);
@@ -272,7 +311,7 @@ if ($afdUlt !== null) {
     check('última linha é o trailer', $tr['tipo_registro'] === '9');
     check('NSR do trailer é 999999999', $tr['nsr'] === '999999999', $tr['nsr']);
     check('contador do tipo 7 bate com as linhas emitidas',
-          (int)$tr['qtd_tipo_7'] === ($afdTipos['7'] ?? -1),
+          (int)$tr['qtd_tipo_7'] === ($afdTipos['7'] ?? 0),
           (int)$tr['qtd_tipo_7'] . ' declarado vs ' . ($afdTipos['7'] ?? 0) . ' emitido');
     // Cabeçalho + marcações + trailer, sem sobra: prova que nenhum tipo saiu
     // fora da contagem.
@@ -291,6 +330,18 @@ check('local da prestação preenchido', trim($local) !== '', "'{$local}'");
 check('cabe no campo de 100 do tipo 2', strlen($local) <= 100, strlen($local) . ' caracteres');
 check('deixou de constar como aviso no AFD',
       !$temAviso(afd_preflight($pdo, '2026-06-01', '2026-06-30'), 'Local da prestacao'));
+// O tipo 2 do AFD sai de um evento `employer_change` no livro. O teste esperava
+// que ALGUÉM tivesse alterado o empregador no mês corrente — só acontecia na
+// máquina de desenvolvimento, e por acaso. Registra a alteração pelo mesmo
+// caminho da tela do empregador (admin/employer_config.php), com o livro em
+// modo shadow, e restaura o modo em seguida.
+$modoAntes = (string)(get_setting('ledger_mode', 'off') ?? 'off');
+set_setting('ledger_mode', 'shadow');
+nsr_ledger_record_cadastro($pdo, 'employer_change', [
+    'origin' => 'system',
+    'reason' => 'teste: alteracao de cadastro do empregador',
+]);
+set_setting('ledger_mode', $modoAntes);
 // Período que contém os eventos de cadastro de hoje — só aí sai registro tipo 2.
 $linhaT2 = null;
 foreach (afd_generate($pdo, date('Y-m-01'), date('Y-m-d'), ['aceitar_spec_nao_verificada' => true]) as $linha) {
@@ -304,7 +355,8 @@ if ($linhaT2 !== null) {
     check('tipo 2 carrega o local da prestação',
           trim($c2['local_prestacao']) === strtoupper(afd_ascii($local)),
           "'" . trim($c2['local_prestacao']) . "'");
-    check('tipo 2 carrega o CNPJ', $c2['ident_empregador'] === '62000259000190');
+    $empCad17 = $pdo->query("SELECT cnpj FROM employer_config LIMIT 1")->fetchColumn();
+    check('tipo 2 carrega o CNPJ cadastrado', $c2['ident_empregador'] === afd_pad_num((string)$empCad17, 14), $c2['ident_empregador']);
 }
 
 echo "[18] Códigos AEJ: preenchidos, porém marcados como não conferidos\n";

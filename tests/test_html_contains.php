@@ -13,7 +13,20 @@ require_once __DIR__ . '/../config.php';
 $pdo = db();
 
 $adm = $pdo->query("SELECT id, username, role, school_id FROM admins ORDER BY id LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-$tId = (int)$pdo->query("SELECT id FROM teachers ORDER BY id LIMIT 1")->fetchColumn();
+// Colaborador próprio para renderizar a tela. Pegava o primeiro do banco — no CI,
+// que parte do schema de produção sem dado nenhum, não havia, e o teste saía com
+// "[ERRO] Precisa admin e teacher cadastrados". Se o CPF fictício já existir,
+// só o reaproveita; se não, cria e remove ao final.
+$cpfHtml = '39053344705';
+$stH = $pdo->prepare("SELECT id FROM teachers WHERE cpf = ? LIMIT 1");
+$stH->execute([$cpfHtml]);
+$tId = (int)$stH->fetchColumn();
+if (!$tId) {
+    $pdo->prepare("INSERT INTO teachers (name, cpf, active, created_at) VALUES (?,?,1,NOW())")
+        ->execute(['ZZ Teste HTML', $cpfHtml]);
+    $tId = (int)$pdo->lastInsertId();
+    register_shutdown_function(fn() => $pdo->prepare("DELETE FROM teachers WHERE id = ?")->execute([$tId]));
+}
 if (!$adm || !$tId) {
     echo "[ERRO] Precisa admin e teacher cadastrados.\n";
     exit(1);

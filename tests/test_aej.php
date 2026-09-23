@@ -51,7 +51,15 @@ catch (RuntimeException $e) { $falhou = str_contains($e->getMessage(), 'nao info
 check('campo ausente é recusado', $falhou);
 
 echo "[2] Jornada contratual LÍQUIDA (o erro que declararia 13h de jornada)\n";
+// A seção [3] verifica que a contagem RESPEITA a data global de início — então
+// fixa essa data em vez de depender do valor que o banco tiver. Passava na
+// máquina de desenvolvimento só porque o banco de lá tem a data configurada; no
+// CI, que parte do schema de produção sem parâmetro nenhum, a seção falhava.
+// Restaurada no finally.
+$countingOriginal = counting_start_date();
+set_setting('counting_start_date', '2026-05-01');
 $teacherId = 0;
+$teacherSemPisId = 0;
 try {
     $schoolId = (int)$pdo->query("SELECT id FROM schools ORDER BY id LIMIT 1")->fetchColumn();
     $pdo->prepare("INSERT INTO teachers (name, cpf, pis, active, created_at) VALUES (?,?,?,1,?)")
@@ -90,6 +98,13 @@ try {
     check('nenhuma jornada declarada como não cumprida', $ap['previsto'] === 0, 'previsto=' . $ap['previsto']);
 
     echo "[4] Pré-voo\n";
+    // O aviso de PIS só existe se houver colaborador ATIVO sem PIS. Na base de
+    // desenvolvimento há vários (decisão da SEMED); no CI o único colaborador é o
+    // deste teste, que tem PIS — e o aviso nunca aparecia. Cria a condição que a
+    // asserção abaixo diz verificar.
+    $pdo->prepare("INSERT INTO teachers (name, cpf, active, created_at) VALUES (?,?,1,?)")
+        ->execute(['ZZ Teste AEJ sem PIS', '00000000353', '2026-01-01 00:00:00']);
+    $teacherSemPisId = (int)$pdo->lastInsertId();
     $pf = aej_preflight($pdo, '2026-05-01', '2026-05-31');
     check('pré-voo devolve estrutura esperada',
           isset($pf['ok'], $pf['bloqueios'], $pf['avisos']));
@@ -162,12 +177,19 @@ try {
     echo "  [FAIL] exceção: " . $e->getMessage() . "\n";
     echo "         " . $e->getFile() . ':' . $e->getLine() . "\n";
 } finally {
+    if ($countingOriginal === null) {
+        $pdo->prepare("DELETE FROM app_settings WHERE k = 'counting_start_date'")->execute();
+        setting_cache_forget('counting_start_date');
+    } else {
+        set_setting('counting_start_date', $countingOriginal);
+    }
     if ($pdo->inTransaction()) $pdo->rollBack();
     if ($teacherId) {
         $pdo->prepare("DELETE FROM attendance WHERE teacher_id = ?")->execute([$teacherId]);
         $pdo->prepare("DELETE FROM collaborator_time_schedules WHERE teacher_id = ?")->execute([$teacherId]);
         $pdo->prepare("DELETE FROM teacher_schools WHERE teacher_id = ?")->execute([$teacherId]);
         $pdo->prepare("DELETE FROM teachers WHERE id = ?")->execute([$teacherId]);
+        if ($teacherSemPisId) $pdo->prepare("DELETE FROM teachers WHERE id = ?")->execute([$teacherSemPisId]);
     }
 }
 

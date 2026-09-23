@@ -81,7 +81,12 @@ try {
 }
 
 // A implementação em si: não pode mais devolver true por exceção.
-$src = file_get_contents(__DIR__ . '/../helpers.php');
+// Normaliza as quebras de linha antes de recortar. O corpo de cada função é
+// recortado até o fecha-chave sozinho numa linha; num checkout Windows com
+// core.autocrlf=true o arquivo vem em CRLF, o recorte não achava o fim,
+// sobravam 3 caracteres e todas as verificações abaixo falhavam sem que o
+// código tivesse mudado.
+$src = str_replace("\r\n", "\n", file_get_contents(__DIR__ . '/../helpers.php'));
 $ini = strpos($src, 'function has_permission');
 $corpo = substr($src, $ini, 2000);
 $corpo = substr($corpo, 0, strpos($corpo, "\n}\n") + 3);

@@ -31,7 +31,6 @@ $adminId = (int)$pdo->query("SELECT id FROM admins WHERE role = 'network_admin' 
 if (!$adminId) $adminId = (int)$pdo->query("SELECT id FROM admins ORDER BY id LIMIT 1")->fetchColumn();
 $_SESSION['admin_id'] = $adminId;
 
-$eventos = fn() => (int)$pdo->query("SELECT COUNT(*) FROM nsr_ledger")->fetchColumn();
 $porTipo = function (string $t) use ($pdo): int {
     return (int)$pdo->query("SELECT COUNT(*) FROM nsr_ledger WHERE event_type = " . $pdo->quote($t))->fetchColumn();
 };
@@ -61,7 +60,7 @@ try {
     $criados[] = $idBase;
     $pdo->commit();
 
-    $ev0 = $eventos();
+    $marks0 = $porTipo('mark');
     $out = admin_save_attendance_day($pdo, $adminId, [
         'teacher_id' => $teacherId,
         'orig_date'  => $data,
@@ -76,8 +75,12 @@ try {
     $novoId = $out['works']['added'][0] ?? null;
     $criados[] = $novoId;
     check('período foi criado', is_int($novoId) && $novoId > 0, json_encode($out['works'] ?? null));
-    check('livro recebeu 2 marcações (entrada + saída)', $eventos() === $ev0 + 2,
-          "eventos: {$ev0} -> " . $eventos());
+    // Conta MARCAÇÕES, não eventos: num livro vazio a primeira marcação emite
+    // também o evento de gênese da cadeia (chain_genesis), e a contagem total
+    // dava 3. Livro vazio é o estado real do primeiro deploy do ledger. Mesmo
+    // critério já usado abaixo para os eventos void.
+    check('livro recebeu 2 marcações (entrada + saída)', $porTipo('mark') === $marks0 + 2,
+          "marcações: {$marks0} -> " . $porTipo('mark'));
 
     $row = $pdo->query("SELECT nsr, nsr_out FROM attendance WHERE id = " . (int)$novoId)->fetch(PDO::FETCH_ASSOC);
     check('attendance.nsr e nsr_out preenchidos e distintos',

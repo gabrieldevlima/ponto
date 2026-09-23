@@ -65,5 +65,19 @@ check('o único CPF é o placeholder 00000000000',
       preg_match_all("/'([0-9]{11})'/", $ref, $cpfs) === 0 || array_unique($cpfs[1]) === ['00000000000'],
       'CPF inesperado no seed de referência');
 
+echo "[5] Os dados de instalação do CI também são fictícios\n";
+// Aqui mora um CNPJ — o lugar mais provável para alguém colar, por engano, o
+// empregador real ao "consertar" um teste.
+$inst = (string)@file_get_contents(__DIR__ . '/../sql/seeds/ci_install.sql');
+preg_match_all('/^\s*(?:INSERT\s+(?:IGNORE\s+)?INTO|UPDATE)\s+`?(\w+)`?/mi', $inst, $mi);
+$permitidasInst = ['nsr_sequence', 'employer_config', 'leave_types'];
+$foraInst = array_diff(array_unique($mi[1]), $permitidasInst);
+check('ci_install.sql só toca registros de controle', $inst !== '' && $foraInst === [],
+      'tabelas inesperadas: ' . implode(', ', $foraInst));
+preg_match_all("/'(\d{14})'/", $inst, $cnpjs);
+check('o único CNPJ é o fictício de exemplo 11.222.333/0001-81',
+      array_unique($cnpjs[1]) === ['11222333000181'], 'CNPJ inesperado: ' . implode(', ', array_unique($cnpjs[1])));
+check('nenhum CPF de 11 dígitos', !preg_match("/'\d{11}'/", $inst));
+
 echo "\n=== Resultado ===\n{$pass} passaram, {$fail} falharam\n";
 exit($fail === 0 ? 0 : 1);

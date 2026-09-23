@@ -145,8 +145,15 @@ jobs:
       - name: Aplicar migrations pendentes
         run: php -r 'require "config.php"; echo "migrations aplicadas\n";'
 
-      - name: Dados de referência
-        run: mysql -h 127.0.0.1 -uroot -proot ponto_test < sql/seeds/ci_reference.sql
+      # Referência: tabelas de apoio (tipos, motivos). Instalação: os registros
+      # de controle que toda instalação tem e que o código assume existir —
+      # contador de NSR, empregador, códigos AEJ. Em produção nasceram de
+      # migrações antigas que, partindo do snapshot, não são reexecutadas.
+      # Ambos fictícios.
+      - name: Dados de referência e de instalação
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot ponto_test < sql/seeds/ci_reference.sql
+          mysql -h 127.0.0.1 -uroot -proot ponto_test < sql/seeds/ci_install.sql
 
       # O sinal que importa. O runner registra a falha e segue — bom em produção,
       # ruim aqui. Toda migração que falhar neste passo vai falhar no deploy.

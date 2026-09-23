@@ -86,6 +86,7 @@ jobs:
       - name: Dados de referência e seed do Lighthouse
         run: |
           mysql -h 127.0.0.1 -uroot -proot ponto < sql/seeds/ci_reference.sql
+          mysql -h 127.0.0.1 -uroot -proot ponto < sql/seeds/ci_install.sql
           # Seed mínimo (1 admin + 1 escola + 1 colab) para autenticar páginas internas
           mysql -h 127.0.0.1 -uroot -proot ponto < sql/seeds/lhci_seed.sql
       - name: Start PHP built-in server
