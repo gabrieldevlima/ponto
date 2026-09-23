@@ -1174,6 +1174,59 @@ function validar_cpf(string $cpf): bool {
 }
 
 /**
+ * Por que este CPF foi recusado? Devolve 'length', 'check_digit' ou null.
+ *
+ * Existe para o log poder dizer QUAL das duas coisas aconteceu. Na tela as duas
+ * viram a mesma mensagem — de propósito, para não revelar quais CPFs existem —
+ * mas quem administra precisa distinguir: 'check_digit' em CPF de 11 dígitos é
+ * quase sempre erro de digitação, enquanto 'length' é campo incompleto.
+ *
+ * Em 23/09/2026 essa diferença custou uma manhã: o colaborador via "CPF ou PIN
+ * incorreto", o log não tinha uma linha sequer, e não havia como saber se ele
+ * errava o CPF ou o PIN.
+ */
+function cpf_reject_reason(string $cpf): ?string {
+    $digits = preg_replace('/\D/', '', $cpf);
+    if (strlen($digits) !== 11)  return 'length';
+    if (!validate_cpf($digits))  return 'check_digit';
+    return null;
+}
+
+/**
+ * Registra uma tentativa de login recusada pelo CPF, antes de qualquer consulta
+ * ao banco de colaboradores.
+ *
+ * Por que existe: a tela devolve "CPF ou PIN incorreto" tanto para CPF quanto
+ * para PIN — de propósito, para não revelar quais CPFs existem. Só que o
+ * caminho do CPF recusado não gravava nada, e as duas causas ficavam
+ * indistinguíveis para quem administra. Em 23/09/2026 um colaborador passou uma
+ * manhã travado e o log não tinha uma linha sequer sobre ele.
+ *
+ * O identifier leva prefixo `cpffmt:` de propósito: assim estas linhas NÃO
+ * entram na contagem de 10 falhas/5min de collaborator_login_by_pin. Quem errou
+ * o CPF dez vezes não pode ficar travado logo depois de acertar — e varrer CPF
+ * inválido não serve a atacante nenhum, já que a requisição nem chega ao banco.
+ *
+ * Nada de CPF em claro: o identifier é hash e os detalhes guardam só o motivo e
+ * a quantidade de dígitos recebida.
+ *
+ * $attemptType separa por onde a pessoa entrou — login, primeiro acesso ou
+ * recuperação de PIN. Sem isso as três portas viram um amontoado só no log e
+ * quem administra não sabe onde o colaborador travou.
+ */
+function auth_log_cpf_rejected(PDO $pdo, string $cpf, string $motivo, string $attemptType = 'collaborator_login'): void {
+    $digits = preg_replace('/\D/', '', $cpf);
+    $identifier = 'cpffmt:' . hash(
+        'sha256',
+        ($_SERVER['REMOTE_ADDR'] ?? '') . '|' . substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 120) . '|' . $digits
+    );
+    auth_attempt_log($pdo, $attemptType, $identifier, false, null, 'cpf_invalid_format', [
+        'motivo'  => $motivo,
+        'digitos' => strlen($digits),
+    ]);
+}
+
+/**
  * Retorna CPF mascarado para exibição (ex.: ***.***.***-12 ou 123.456.789-00).
  */
 function mask_cpf(string $cpf): string {

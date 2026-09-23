@@ -31,9 +31,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'login
     // "Digite o PIN completo" é UX (campo em branco), permitido.
     $clientFp = (string)($_POST['client_fp'] ?? '');
 
+    $cpfRejeitado = cpf_reject_reason($cpf);
+
     if (strlen($pin) < 4 || strlen($pin) > 8) {
         $error = 'Digite o PIN completo.';
-    } elseif (strlen($cpf) !== 11 || !validar_cpf($cpf)) {
+    } elseif ($cpfRejeitado !== null) {
+        // A tela diz o mesmo que diria para PIN errado — não se revela quais
+        // CPFs existem. Mas a tentativa passa a deixar rastro: sem isso, uma
+        // manhã inteira de falhas some do log e não há como separar "digitou o
+        // CPF errado" de "digitou o PIN errado" (23/09/2026).
+        try {
+            auth_log_cpf_rejected(db(), $cpf, $cpfRejeitado);
+        } catch (Throwable $e) {
+            error_log('login cpf_invalid_format log failed: ' . $e->getMessage());
+        }
         $error = 'CPF ou PIN incorreto.';
     } elseif (collaborator_login_by_pin($cpf, $pin, $clientFp)) {
         header('Location: index.php');

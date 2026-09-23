@@ -87,7 +87,12 @@ if (is_collaborator_logged()) {
 }
 
 $cpf = preg_replace('/\D/', '', (string)($input['cpf'] ?? ''));
-if (strlen($cpf) !== 11 || !validar_cpf($cpf)) {
+$cpfRejeitado = cpf_reject_reason($cpf);
+if ($cpfRejeitado !== null) {
+    // Mesma cegueira que o login tinha: sem registro, uma sequência de
+    // tentativas recusadas some e o admin não sabe onde a pessoa travou.
+    try { auth_log_cpf_rejected(db(), $cpf, $cpfRejeitado, 'pin_enrollment'); }
+    catch (Throwable $e) { error_log('pin_enrollment cpf_invalid_format log failed: ' . $e->getMessage()); }
     enroll_error(400, 'cpf_invalid', 'CPF inválido.', ['Verifique se digitou o CPF corretamente.']);
 }
 
