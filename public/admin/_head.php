@@ -22,7 +22,12 @@ define('APP_ADMIN_HEAD_RENDERED', true);
     <title><?= esc($titulo ?? 'Administração') ?> | DEEDO Ponto</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
-    <link href="../assets/admin.css" rel="stylesheet">
+    <?php /* css/admin.css, como nas demais telas. Apontava para ../assets/admin.css,
+             arquivo que nunca existiu: as três telas deste include saíam com o
+             Bootstrap mas sem o estilo do admin. */ ?>
+    <link href="css/admin.css" rel="stylesheet">
+    <link rel="shortcut icon" href="../img/icone-2.ico" type="image/x-icon">
+    <link rel="icon" href="../img/icone-2.ico" type="image/x-icon">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </head>
 <body>

@@ -87,6 +87,22 @@ foreach (['export_afd.php', 'export_aej.php', 'timesheet_mirror.php'] as $t) {
     check("{$t} está no menu", str_contains($navbar, 'href="' . $t . '"'));
 }
 
+echo "[Folhas de estilo e ícones locais existem]\n";
+// _head.php e import_pis.php apontavam para ../assets/admin.css, arquivo que
+// nunca existiu: as telas saíam com o Bootstrap mas sem o estilo do admin, e
+// nada acusava — o navegador só registra um 404 e segue. O teste de renderização
+// acima não pega isso, porque o HTML sai íntegro.
+$quebrados = [];
+foreach (glob(__DIR__ . '/../public/admin/*.php') ?: [] as $arq) {
+    preg_match_all('/<link[^>]+href="([^"]+\.(?:css|ico))"/', (string)file_get_contents($arq), $m);
+    foreach ($m[1] as $href) {
+        if (preg_match('#^(https?:)?//#', $href) || str_contains($href, '<?')) continue;
+        $caminho = dirname($arq) . '/' . explode('?', $href)[0];
+        if (realpath($caminho) === false) $quebrados[] = basename($arq) . ' -> ' . $href;
+    }
+}
+check('toda folha de estilo/ícone local referenciado existe', empty($quebrados), implode(', ', $quebrados));
+
 echo "\n=== Resultado ===\n";
 echo "Passed: {$pass}\n";
 echo "Failed: {$fail}\n";
